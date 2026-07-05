@@ -1,0 +1,109 @@
+package com.mitra.users;
+
+import jakarta.persistence.*;
+import lombok.*;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+
+/**
+ * Represents a service provider (worker who fulfills bookings).
+ *
+ * Status lifecycle:
+ *   PENDING_REVIEW → APPROVED (can log in and receive jobs)
+ *                  → REJECTED (cannot log in)
+ *   APPROVED       → SUSPENDED (temporarily blocked)
+ *   SUSPENDED      → APPROVED (reactivated by admin)
+ */
+@Entity
+@Table(name = "providers")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Provider {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "business_name")
+    private String businessName;
+
+    private String name;
+    private Integer age;
+    
+    @Column(columnDefinition = "TEXT")
+    private String description;
+
+    /**
+     * PENDING_REVIEW | APPROVED | REJECTED | SUSPENDED
+     * Default is PENDING_REVIEW — admin must explicitly approve.
+     */
+    @Column(nullable = false)
+    private String status = "PENDING_REVIEW";
+
+    @Column(unique = true)
+    private String phone;
+
+    private String email;
+    private String address;
+
+    /**
+     * Maps to service categories: ELECTRICAL, PLUMBING, CLEANING, AC, PAINTING, etc.
+     */
+    @Column(name = "service_category")
+    private String serviceCategory;
+
+    private Double latitude;
+    private Double longitude;
+    private String skills;
+
+    @Column(name = "experience_years")
+    private Integer experienceYears;
+
+    private String languages;
+
+    @Column(name = "is_online")
+    private Boolean isOnline = false;
+
+    @Column(name = "profile_photo_url")
+    private String profilePhotoUrl;
+
+    @Column(name = "pan_file_url")
+    private String panFileUrl;
+
+    @Column(name = "citizen_file_url")
+    private String citizenFileUrl;
+
+    /**
+     * Cached average rating. Recalculated after each new rating submission.
+     * Stored as DECIMAL(3,2) → max 9.99 (but range is 0.00–5.00).
+     */
+    @Column(name = "rating_cache", precision = 3, scale = 2)
+    private BigDecimal ratingCache = BigDecimal.ZERO;
+
+    @Column(name = "total_jobs")
+    private Integer totalJobs = 0;
+
+    @Column(name = "working_hours_start")
+    private String workingHoursStart = "09:00";
+
+    @Column(name = "working_hours_end")
+    private String workingHoursEnd = "18:00";
+
+    @Column(name = "working_days")
+    private String workingDays = "MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY,SATURDAY";
+
+
+
+    @Column(name = "admin_notes")
+    private String adminNotes;
+
+    @Column(name = "created_at", insertable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+}

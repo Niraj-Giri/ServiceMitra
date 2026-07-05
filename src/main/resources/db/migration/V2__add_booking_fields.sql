@@ -1,0 +1,6 @@
+ALTER TABLE bookings
+ADD COLUMN service_id BIGINT,
+ADD COLUMN scheduled_at TIMESTAMP,
+ADD COLUMN amount_npr DECIMAL(10,2),
+ADD COLUMN coins_used INT,
+ADD COLUMN hold_id BIGINT;
