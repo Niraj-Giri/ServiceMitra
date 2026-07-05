@@ -203,10 +203,10 @@ public class BookingController {
     }
 
     /**
-     * POST /api/v1/bookings/{id}/complete
+     * POST/PUT /api/v1/bookings/{id}/complete
      * Provider marks the job as complete. Triggers earning credit. Matches frontend.
      */
-    @PostMapping("/{id}/complete")
+    @RequestMapping(value = "/{id}/complete", method = {RequestMethod.POST, RequestMethod.PUT})
     public ResponseEntity<ApiResponse<BookingResponse>> completeBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id) {
