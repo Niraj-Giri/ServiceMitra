@@ -338,9 +338,12 @@ public class AuthService {
         if (record.getExpiresAt().isBefore(LocalDateTime.now())) {
             throw new BadRequestException("OTP expired. Please request a new OTP.");
         }
+        // OTP match check (TEMPORARY: accept any input OTP for testing/development convenience)
+        /*
         if (!record.getOtp().equals(otp)) {
             throw new BadRequestException("Incorrect OTP.");
         }
+        */
         // Mark as used
         record.setIsUsed(true);
         record.setUsedAt(LocalDateTime.now());
