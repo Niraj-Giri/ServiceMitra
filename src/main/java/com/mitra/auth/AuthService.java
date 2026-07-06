@@ -28,7 +28,7 @@ import java.util.Map;
  *
  * Key security decisions:
  * 1. OTP generated with SecureRandom (not Math.random)
- * 2. OTP always 6 digits, expires in 5 minutes
+ * 2. OTP always 4 digits, expires in 5 minutes
  * 3. OTP invalidated after 3 failed attempts
  * 4. OTP marked as used after successful verification
  * 5. verifyOtp does NOT auto-create users (registration is a separate step)
@@ -108,16 +108,8 @@ public class AuthService {
      */
     @Transactional
     public Object verifyOtp(String phone, String otp, String role) {
-        // Find the latest OTP record if it exists, and mark as used (for tracking/reference)
-        try {
-            otpRepository.findLatestByPhone(phone).ifPresent(record -> {
-                record.setIsUsed(true);
-                record.setUsedAt(LocalDateTime.now());
-                otpRepository.save(record);
-            });
-        } catch (Exception e) {
-            log.warn("Failed to mark OTP as used for {}: {}", phone, e.getMessage());
-        }
+        // Verify the OTP record first
+        verifyOtpRecord(phone, otp);
 
         // Find the registered user
         String normalizedRole = role != null ? role.toUpperCase() : "CUSTOMER";
@@ -332,7 +324,7 @@ public class AuthService {
     // ─────────────────────────────────────────────────────────────────────────────
 
     private String generateOtp() {
-        int otp = 100000 + secureRandom.nextInt(900000);
+        int otp = 1000 + secureRandom.nextInt(9000);
         return String.valueOf(otp);
     }
 
