@@ -33,4 +33,6 @@ public interface ProviderRepository extends JpaRepository<Provider, Long> {
      * Count providers by status — for admin dashboard analytics.
      */
     long countByStatus(String status);
+
+    long countByIsOnline(Boolean isOnline);
 }

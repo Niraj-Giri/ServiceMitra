@@ -53,6 +53,85 @@ public class DatabaseSeeder implements CommandLineRunner {
         executeAlterSafe("ALTER TABLE providers ADD COLUMN admin_notes TEXT");
         executeAlterSafe("ALTER TABLE providers MODIFY COLUMN status VARCHAR(30) DEFAULT 'PENDING_REVIEW'");
         executeAlterSafe("ALTER TABLE providers MODIFY COLUMN rating_cache DECIMAL(3,2) DEFAULT 0.00");
+        executeAlterSafe("ALTER TABLE providers ADD COLUMN bank_details VARCHAR(255) NULL");
+        executeAlterSafe("ALTER TABLE providers ADD COLUMN certificates_urls TEXT NULL");
+        executeAlterSafe("ALTER TABLE providers ADD COLUMN acceptance_rate DECIMAL(5, 2) NOT NULL DEFAULT 100.00");
+        executeAlterSafe("ALTER TABLE providers ADD COLUMN commission_percentage DECIMAL(5, 2) NULL");
+
+        // 2.5 Create Admin Operations Tables
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS platform_settings (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "platform_name VARCHAR(100) NOT NULL DEFAULT 'ServiceMitra'," +
+                "commission_percentage DECIMAL(5, 2) NOT NULL DEFAULT 10.00," +
+                "support_number VARCHAR(20) NOT NULL DEFAULT '9800000000'," +
+                "cancellation_policy TEXT NULL," +
+                "auto_assignment_rules VARCHAR(100) DEFAULT 'CLOSEST_DISTANCE'," +
+                "booking_radius DOUBLE DEFAULT 15.0," +
+                "working_hours VARCHAR(100) DEFAULT '08:00-20:00'," +
+                "tax_settings VARCHAR(100) DEFAULT 'NONE'," +
+                "payment_gateway VARCHAR(50) DEFAULT 'COD')");
+
+        executeAlterSafe("INSERT INTO platform_settings (platform_name, commission_percentage, support_number) " +
+                "SELECT 'ServiceMitra', 10.00, '9800000000' FROM DUAL " +
+                "WHERE NOT EXISTS (SELECT * FROM platform_settings)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS audit_logs (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "admin VARCHAR(100) NOT NULL," +
+                "action TEXT NOT NULL," +
+                "entity VARCHAR(100) NULL," +
+                "old_value TEXT NULL," +
+                "new_value TEXT NULL," +
+                "timestamp DATETIME NOT NULL," +
+                "ip_address VARCHAR(45) NULL)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS complaints (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "booking_id BIGINT NOT NULL," +
+                "customer_id BIGINT NOT NULL," +
+                "provider_id BIGINT NOT NULL," +
+                "subject VARCHAR(255) NOT NULL," +
+                "description TEXT NOT NULL," +
+                "status VARCHAR(30) NOT NULL DEFAULT 'PENDING'," +
+                "priority VARCHAR(20) NOT NULL DEFAULT 'MEDIUM'," +
+                "evidence_url VARCHAR(255) NULL," +
+                "created_at DATETIME NOT NULL," +
+                "resolved_at DATETIME NULL)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS complaint_messages (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "complaint_id BIGINT NOT NULL," +
+                "sender_id BIGINT NOT NULL," +
+                "sender_role VARCHAR(20) NOT NULL," +
+                "content TEXT NOT NULL," +
+                "created_at DATETIME NOT NULL)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS transactions (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "booking_id BIGINT NOT NULL," +
+                "customer_id BIGINT NOT NULL," +
+                "provider_id BIGINT NOT NULL," +
+                "amount DECIMAL(10, 2) NOT NULL," +
+                "commission DECIMAL(10, 2) NOT NULL," +
+                "provider_earnings DECIMAL(10, 2) NOT NULL," +
+                "status VARCHAR(30) NOT NULL DEFAULT 'PENDING'," +
+                "transaction_id VARCHAR(100) NOT NULL," +
+                "created_at DATETIME NOT NULL)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS payout_requests (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "provider_id BIGINT NOT NULL," +
+                "amount DECIMAL(10, 2) NOT NULL," +
+                "status VARCHAR(30) NOT NULL DEFAULT 'PENDING'," +
+                "created_at DATETIME NOT NULL)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS booking_status_history (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "booking_id BIGINT NOT NULL," +
+                "status VARCHAR(30) NOT NULL," +
+                "updated_at DATETIME NOT NULL," +
+                "updated_by VARCHAR(50) NOT NULL," +
+                "notes TEXT NULL)");
 
         // 3. Synchronize Booking columns
         executeAlterSafe("ALTER TABLE bookings ADD COLUMN otp_generated_at DATETIME NULL");
@@ -63,6 +142,14 @@ public class DatabaseSeeder implements CommandLineRunner {
         executeAlterSafe("ALTER TABLE bookings ADD COLUMN cancellation_reason TEXT NULL");
         executeAlterSafe("ALTER TABLE bookings ADD COLUMN rejected_provider_ids VARCHAR(500) NULL");
         executeAlterSafe("ALTER TABLE bookings MODIFY COLUMN status VARCHAR(30) NOT NULL DEFAULT 'PENDING_DISPATCH'");
+        executeAlterSafe("UPDATE bookings SET status = 'PENDING_DISPATCH' WHERE status = 'REQUESTED'");
+        executeAlterSafe("DELETE FROM booking_status_history WHERE booking_id IN (SELECT id FROM bookings WHERE user_id = 0 OR user_id NOT IN (SELECT id FROM users))");
+        executeAlterSafe("DELETE FROM chat_messages WHERE booking_id IN (SELECT id FROM bookings WHERE user_id = 0 OR user_id NOT IN (SELECT id FROM users))");
+        executeAlterSafe("DELETE FROM reviews WHERE booking_id IN (SELECT id FROM bookings WHERE user_id = 0 OR user_id NOT IN (SELECT id FROM users))");
+        executeAlterSafe("DELETE FROM complaints WHERE booking_id IN (SELECT id FROM bookings WHERE user_id = 0 OR user_id NOT IN (SELECT id FROM users))");
+        executeAlterSafe("DELETE FROM transactions WHERE booking_id IN (SELECT id FROM bookings WHERE user_id = 0 OR user_id NOT IN (SELECT id FROM users))");
+        executeAlterSafe("DELETE FROM bookings WHERE user_id = 0 OR user_id NOT IN (SELECT id FROM users)");
+        executeAlterSafe("UPDATE bookings SET provider_id = NULL WHERE provider_id = 0 OR (provider_id IS NOT NULL AND provider_id NOT IN (SELECT id FROM providers))");
 
         // 4. Synchronize Service Listing columns
         executeAlterSafe("ALTER TABLE services ADD COLUMN duration_min INT NULL");
@@ -75,6 +162,7 @@ public class DatabaseSeeder implements CommandLineRunner {
         executeAlterSafe("ALTER TABLE reviews ADD COLUMN behavior_score TINYINT NOT NULL DEFAULT 5");
         executeAlterSafe("ALTER TABLE reviews ADD COLUMN overall_score DECIMAL(3,2) NOT NULL DEFAULT 5.00");
         executeAlterSafe("ALTER TABLE reviews ADD COLUMN is_visible BOOLEAN DEFAULT TRUE");
+        executeAlterSafe("ALTER TABLE reviews MODIFY COLUMN rating INT NULL");
         executeAlterSafe("ALTER TABLE reviews ADD UNIQUE INDEX uk_reviews_booking_id (booking_id)");
 
         // 6. Add performance indexes

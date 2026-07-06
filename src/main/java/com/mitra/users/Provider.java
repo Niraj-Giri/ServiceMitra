@@ -98,6 +98,18 @@ public class Provider {
 
 
 
+    @Column(name = "bank_details")
+    private String bankDetails;
+
+    @Column(name = "certificates_urls", columnDefinition = "TEXT")
+    private String certificatesUrls;
+
+    @Column(name = "acceptance_rate", precision = 5, scale = 2, nullable = false)
+    private BigDecimal acceptanceRate = BigDecimal.valueOf(100.00);
+
+    @Column(name = "commission_percentage", precision = 5, scale = 2)
+    private BigDecimal commissionPercentage;
+
     @Column(name = "admin_notes")
     private String adminNotes;
 
