@@ -42,4 +42,20 @@ public class PlatformSettings {
 
     @Column(name = "payment_gateway")
     private String paymentGateway;
+
+    @Column(name = "points_per_npr_spent", nullable = false)
+    @Builder.Default
+    private BigDecimal pointsPerNprSpent = new BigDecimal("0.10");
+
+    @Column(name = "points_redemption_rate", nullable = false)
+    @Builder.Default
+    private BigDecimal pointsRedemptionRate = new BigDecimal("1.00");
+
+    @Column(name = "first_booking_points_bonus", nullable = false)
+    @Builder.Default
+    private Integer firstBookingPointsBonus = 50;
+
+    @Column(name = "referral_points_bonus", nullable = false)
+    @Builder.Default
+    private Integer referralPointsBonus = 30;
 }

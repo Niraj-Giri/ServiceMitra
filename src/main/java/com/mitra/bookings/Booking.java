@@ -139,6 +139,12 @@ public class Booking {
     @Column(name = "hold_id")
     private Long holdId;
 
+    @Column(name = "points_redeemed")
+    private Integer pointsRedeemed;
+
+    @Column(name = "points_discount_npr", precision = 12, scale = 2)
+    private BigDecimal pointsDiscountNpr;
+
     /**
      * Comma-separated list of provider IDs that have rejected this booking.
      * Used by dispatch service to skip them during re-assignment.

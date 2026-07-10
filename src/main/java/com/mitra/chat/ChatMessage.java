@@ -19,8 +19,12 @@ public class ChatMessage {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "booking_id", nullable = false)
+    @JoinColumn(name = "booking_id", nullable = true)
     private Booking booking;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "task_request_id", nullable = true)
+    private com.mitra.taskrequests.TaskRequest taskRequest;
 
     @Column(name = "sender_id", nullable = false)
     private Long senderId;

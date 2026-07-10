@@ -5,4 +5,5 @@ import java.util.List;
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, Long> {
     List<ChatMessage> findByBookingIdOrderByCreatedAtAsc(Long bookingId);
+    List<ChatMessage> findByTaskRequestIdOrderByCreatedAtAsc(Long taskRequestId);
 }

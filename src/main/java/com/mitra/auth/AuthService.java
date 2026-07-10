@@ -14,6 +14,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import com.mitra.common.RewardPointsHistory;
+import com.mitra.common.RewardPointsHistoryRepository;
+import com.mitra.config.PlatformSettings;
+import com.mitra.config.PlatformSettingsRepository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.Key;
@@ -46,17 +50,23 @@ public class AuthService {
     private final UserRepository userRepository;
     private final ProviderRepository providerRepository;
     private final OtpVerificationRepository otpRepository;
+    private final RewardPointsHistoryRepository rewardPointsHistoryRepository;
+    private final PlatformSettingsRepository platformSettingsRepository;
     private final Key jwtKey;
     private final long jwtExpirationMs;
 
     public AuthService(UserRepository userRepository,
                        ProviderRepository providerRepository,
                        OtpVerificationRepository otpRepository,
+                       RewardPointsHistoryRepository rewardPointsHistoryRepository,
+                       PlatformSettingsRepository platformSettingsRepository,
                        @Value("${jwt.secret}") String secret,
                        @Value("${jwt.expirationMs}") long expirationMs) {
         this.userRepository = userRepository;
         this.providerRepository = providerRepository;
         this.otpRepository = otpRepository;
+        this.rewardPointsHistoryRepository = rewardPointsHistoryRepository;
+        this.platformSettingsRepository = platformSettingsRepository;
         this.jwtKey = Keys.hmacShaKeyFor(secret.getBytes());
         this.jwtExpirationMs = expirationMs;
     }
@@ -169,7 +179,9 @@ public class AuthService {
                 .role("CUSTOMER")
                 .isActive(true)
                 .build();
-        return userRepository.save(user);
+        user = userRepository.save(user);
+        awardFirstBookingAndReferral(user, null);
+        return user;
     }
 
     /**
@@ -360,6 +372,11 @@ public class AuthService {
     // AuthController is fully rewritten
     @Transactional
     public Long signup(String name, String phone, String email, String role, String serviceCategory) {
+        return signup(name, phone, email, role, serviceCategory, null);
+    }
+
+    @Transactional
+    public Long signup(String name, String phone, String email, String role, String serviceCategory, String referredBy) {
         if ("PROVIDER".equalsIgnoreCase(role)) {
             if (providerRepository.findByPhone(phone).isPresent()) {
                 throw new RuntimeException("Phone number already registered as provider");
@@ -388,7 +405,58 @@ public class AuthService {
             user.setPassword("OTP_AUTH");
             user.setIsActive(true);
             user = userRepository.save(user);
+            awardFirstBookingAndReferral(user, referredBy);
             return user.getId();
+        }
+    }
+
+    private void awardFirstBookingAndReferral(User user, String referredBy) {
+        PlatformSettings settings = platformSettingsRepository.findById(1L).orElse(null);
+        int signupBonus = settings != null && settings.getFirstBookingPointsBonus() != null
+                ? settings.getFirstBookingPointsBonus()
+                : 50;
+        int referralBonus = settings != null && settings.getReferralPointsBonus() != null
+                ? settings.getReferralPointsBonus()
+                : 30;
+
+        user.setRewardPoints(signupBonus);
+        userRepository.save(user);
+
+        RewardPointsHistory signupHistory = RewardPointsHistory.builder()
+                .userId(user.getId())
+                .points(signupBonus)
+                .actionType("FIRST_BOOKING")
+                .description("Registration welcome reward points!")
+                .createdAt(LocalDateTime.now())
+                .build();
+        rewardPointsHistoryRepository.save(signupHistory);
+
+        if (referredBy != null && !referredBy.trim().isEmpty() && !referredBy.equals(user.getPhone())) {
+            userRepository.findByPhone(referredBy.trim()).ifPresent(referrer -> {
+                referrer.setRewardPoints((referrer.getRewardPoints() != null ? referrer.getRewardPoints() : 0) + referralBonus);
+                userRepository.save(referrer);
+
+                RewardPointsHistory referrerHistory = RewardPointsHistory.builder()
+                        .userId(referrer.getId())
+                        .points(referralBonus)
+                        .actionType("REFERRAL")
+                        .description("Referral bonus for inviting " + user.getName() + " (" + user.getPhone() + ")")
+                        .createdAt(LocalDateTime.now())
+                        .build();
+                rewardPointsHistoryRepository.save(referrerHistory);
+
+                user.setRewardPoints((user.getRewardPoints() != null ? user.getRewardPoints() : 0) + referralBonus);
+                userRepository.save(user);
+
+                RewardPointsHistory refereeHistory = RewardPointsHistory.builder()
+                        .userId(user.getId())
+                        .points(referralBonus)
+                        .actionType("REFERRAL")
+                        .description("Referral welcome bonus for signing up via " + referrer.getName())
+                        .createdAt(LocalDateTime.now())
+                        .build();
+                rewardPointsHistoryRepository.save(refereeHistory);
+            });
         }
     }
 

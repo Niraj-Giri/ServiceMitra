@@ -11,6 +11,12 @@ import com.mitra.users.Provider;
 import com.mitra.users.ProviderRepository;
 import com.mitra.users.User;
 import com.mitra.users.UserRepository;
+import com.mitra.common.RewardPointsHistory;
+import com.mitra.common.RewardPointsHistoryRepository;
+import com.mitra.users.ProviderIncentive;
+import com.mitra.users.ProviderIncentiveRepository;
+import com.mitra.config.PlatformSettings;
+import com.mitra.config.PlatformSettingsRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -45,6 +51,9 @@ public class BookingService {
     private final UserRepository userRepository;
     private final ProviderRepository providerRepository;
     private final ServiceListingRepository serviceListingRepository;
+    private final RewardPointsHistoryRepository rewardPointsHistoryRepository;
+    private final ProviderIncentiveRepository providerIncentiveRepository;
+    private final PlatformSettingsRepository platformSettingsRepository;
 
     // ─────────────────────────────────────────────────────────────────────────────
     // CREATE
@@ -58,7 +67,7 @@ public class BookingService {
         ServiceListing service = serviceListingRepository.findById(request.getServiceId())
                 .orElseThrow(() -> ResourceNotFoundException.of("Service", request.getServiceId()));
 
-        if (!service.getIsActive()) {
+        if (Boolean.FALSE.equals(service.getIsActive())) {
             throw new BadRequestException("This service is currently unavailable");
         }
 
@@ -83,6 +92,35 @@ public class BookingService {
             }
         }
 
+        int pointsRedeemed = 0;
+        BigDecimal pointsDiscountNpr = BigDecimal.ZERO;
+
+        if (request.getPointsToRedeem() != null && request.getPointsToRedeem() > 0) {
+            int pointsRequested = request.getPointsToRedeem();
+            if (user.getRewardPoints() == null || user.getRewardPoints() < pointsRequested) {
+                throw new BadRequestException("Insufficient reward points balance. You have " 
+                        + (user.getRewardPoints() != null ? user.getRewardPoints() : 0) + " points.");
+            }
+            PlatformSettings settings = platformSettingsRepository.findById(1L).orElse(null);
+            BigDecimal redemptionRate = settings != null && settings.getPointsRedemptionRate() != null 
+                    ? settings.getPointsRedemptionRate() 
+                    : BigDecimal.ONE;
+
+            BigDecimal maxDiscount = service.getBasePrice();
+            BigDecimal discount = new BigDecimal(pointsRequested).multiply(redemptionRate);
+            if (discount.compareTo(maxDiscount) > 0) {
+                discount = maxDiscount;
+                pointsRequested = (int) Math.ceil(maxDiscount.doubleValue() / redemptionRate.doubleValue());
+            }
+
+            pointsRedeemed = pointsRequested;
+            pointsDiscountNpr = discount;
+
+            // Deduct from user
+            user.setRewardPoints(user.getRewardPoints() - pointsRedeemed);
+            userRepository.save(user);
+        }
+
         Booking booking = Booking.builder()
                 .user(user)
                 .provider(provider)                      // direct select assign
@@ -93,6 +131,8 @@ public class BookingService {
                 .addressId(request.getAddressId())
                 .notes(request.getNotes())
                 .amountNpr(service.getBasePrice())       // fixed price from service
+                .pointsRedeemed(pointsRedeemed)
+                .pointsDiscountNpr(pointsDiscountNpr)
                 .status(BookingStatus.ASSIGNED)          // direct assign starts in ASSIGNED status
                 .updatedAt(LocalDateTime.now())
                 .build();
@@ -100,6 +140,18 @@ public class BookingService {
         booking = bookingRepository.save(booking);
         log.info("Booking {} created by user {} and directly assigned to provider {} for service '{}'", 
                 booking.getId(), user.getId(), provider.getId(), service.getName());
+
+        if (pointsRedeemed > 0) {
+            RewardPointsHistory history = RewardPointsHistory.builder()
+                    .userId(user.getId())
+                    .points(-pointsRedeemed)
+                    .actionType("BOOKING_REDEEMED")
+                    .description("Redeemed points on Booking #" + booking.getId())
+                    .bookingId(booking.getId())
+                    .createdAt(LocalDateTime.now())
+                    .build();
+            rewardPointsHistoryRepository.save(history);
+        }
 
         return BookingResponse.from(booking, false, false);
     }
@@ -269,17 +321,56 @@ public class BookingService {
         booking.setUpdatedAt(LocalDateTime.now());
         bookingRepository.save(booking);
 
-        // Update provider total jobs completed
+        // 1. Award Customer Reward Points
+        User customer = booking.getUser();
+        if (customer != null) {
+            PlatformSettings settings = platformSettingsRepository.findById(1L).orElse(null);
+            BigDecimal earningRate = settings != null && settings.getPointsPerNprSpent() != null
+                    ? settings.getPointsPerNprSpent()
+                    : new BigDecimal("0.10");
+            
+            BigDecimal pointsToEarnDec = grossAmount.multiply(earningRate);
+            int pointsToEarn = pointsToEarnDec.setScale(0, java.math.RoundingMode.HALF_UP).intValue();
+            if (pointsToEarn > 0) {
+                customer.setRewardPoints((customer.getRewardPoints() != null ? customer.getRewardPoints() : 0) + pointsToEarn);
+                userRepository.save(customer);
+
+                RewardPointsHistory pointsHistory = RewardPointsHistory.builder()
+                        .userId(customer.getId())
+                        .points(pointsToEarn)
+                        .actionType("BOOKING_EARNED")
+                        .description("Earned points on Completed Booking #" + booking.getId())
+                        .bookingId(booking.getId())
+                        .createdAt(LocalDateTime.now())
+                        .build();
+                rewardPointsHistoryRepository.save(pointsHistory);
+            }
+        }
+
+        // 2. Update Provider Stats & Milestones
         Provider provider = booking.getProvider();
         if (provider != null) {
-            provider.setTotalJobs(provider.getTotalJobs() + 1);
+            int newTotalJobs = provider.getTotalJobs() + 1;
+            provider.setTotalJobs(newTotalJobs);
             providerRepository.save(provider);
+
+            // Automate Provider Milestone: 5 Completed Bookings = Rs 500 Bonus
+            if (newTotalJobs % 5 == 0) {
+                ProviderIncentive milestoneBonus = ProviderIncentive.builder()
+                        .providerId(provider.getId())
+                        .amount(new BigDecimal("500.00"))
+                        .bookingId(booking.getId())
+                        .reason("COMPLETED_BOOKINGS_MILESTONE")
+                        .description("Milestone Bonus: Completed " + newTotalJobs + " jobs!")
+                        .status("PENDING_PAYOUT")
+                        .createdAt(LocalDateTime.now())
+                        .build();
+                providerIncentiveRepository.save(milestoneBonus);
+            }
         }
 
         log.info("Booking {} completed. Gross: {}, Fee: {}, Net to provider: {}",
                 bookingId, grossAmount, platformFee, netEarnings);
-
-        // TODO Phase 2: Send rating prompt notification to customer (delayed 2 hours)
 
         return BookingResponse.from(booking, false, false);
     }

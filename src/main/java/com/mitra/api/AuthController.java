@@ -34,7 +34,8 @@ public class AuthController {
                 payload.get("phone"),
                 payload.get("email"),
                 payload.get("role"),
-                payload.get("serviceCategory")
+                payload.get("serviceCategory"),
+                payload.get("referredBy")
             );
             String token;
             Object principal;

@@ -39,4 +39,6 @@ public class CreateBookingRequest {
 
     @Size(max = 1000, message = "Notes cannot exceed 1000 characters")
     private String notes;     // Optional: customer's problem description
+
+    private Integer pointsToRedeem;
 }

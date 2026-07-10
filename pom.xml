@@ -126,11 +126,13 @@
 			<plugin>
 				<groupId>org.flywaydb</groupId>
 				<artifactId>flyway-maven-plugin</artifactId>
-				<version>10.15.0</version>
+				<version>12.4.0</version>
 				<configuration>
 					<url>jdbc:mysql://localhost:3306/mechanic_mitra</url>
 					<user>root</user>
 					<password>@#New7890</password>
+					<baselineOnMigrate>true</baselineOnMigrate>
+					<baselineVersion>7</baselineVersion>
 				</configuration>
 				<dependencies>
 					<dependency>

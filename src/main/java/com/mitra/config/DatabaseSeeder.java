@@ -176,6 +176,35 @@ public class DatabaseSeeder implements CommandLineRunner {
         executeIndexSafe("idx_otp_phone", "ALTER TABLE otp_verifications ADD INDEX idx_otp_phone (phone)");
         executeIndexSafe("idx_reviews_provider_id", "ALTER TABLE reviews ADD INDEX idx_reviews_provider_id (provider_id)");
 
+        // 6.5 Reward Points & Provider Incentives Schema Synchronization
+        executeAlterSafe("ALTER TABLE users ADD COLUMN reward_points INT NOT NULL DEFAULT 0");
+        executeAlterSafe("ALTER TABLE bookings ADD COLUMN points_redeemed INT NULL DEFAULT 0");
+        executeAlterSafe("ALTER TABLE bookings ADD COLUMN points_discount_npr DECIMAL(12,2) NULL DEFAULT 0.00");
+        executeAlterSafe("ALTER TABLE platform_settings ADD COLUMN points_per_npr_spent DECIMAL(5,2) NOT NULL DEFAULT 0.10");
+        executeAlterSafe("ALTER TABLE platform_settings ADD COLUMN points_redemption_rate DECIMAL(5,2) NOT NULL DEFAULT 1.00");
+        executeAlterSafe("ALTER TABLE platform_settings ADD COLUMN first_booking_points_bonus INT NOT NULL DEFAULT 50");
+        executeAlterSafe("ALTER TABLE platform_settings ADD COLUMN referral_points_bonus INT NOT NULL DEFAULT 30");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS reward_points_history (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "user_id BIGINT NOT NULL," +
+                "points INT NOT NULL," +
+                "action_type VARCHAR(50) NOT NULL," +
+                "description VARCHAR(255) NULL," +
+                "booking_id BIGINT NULL," +
+                "created_at DATETIME NOT NULL)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS provider_incentives (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "provider_id BIGINT NOT NULL," +
+                "amount DECIMAL(12,2) NOT NULL," +
+                "booking_id BIGINT NULL," +
+                "reason VARCHAR(50) NOT NULL," +
+                "description VARCHAR(255) NULL," +
+                "status VARCHAR(30) NOT NULL DEFAULT 'PENDING_PAYOUT'," +
+                "created_at DATETIME NOT NULL," +
+                "payout_id BIGINT NULL)");
+
         // 7. Normalize legacy status naming
         try {
             jdbcTemplate.execute("UPDATE bookings SET status = 'COMPLETED' WHERE status IN ('completed', 'COMPLETE')");

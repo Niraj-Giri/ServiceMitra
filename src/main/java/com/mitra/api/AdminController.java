@@ -45,6 +45,8 @@ public class AdminController {
     private final TransactionRepository transactionRepository;
     private final PayoutRequestRepository payoutRequestRepository;
     private final BookingStatusHistoryRepository bookingStatusHistoryRepository;
+    private final RewardPointsHistoryRepository rewardPointsHistoryRepository;
+    private final ProviderIncentiveRepository providerIncentiveRepository;
 
     // Helper for audit logs
     private void logAdminAction(String action, String entity, String oldValue, String newValue) {
@@ -218,6 +220,46 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(responses));
     }
 
+    @GetMapping("/customers/{id}/loyalty")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getCustomerLoyalty(@PathVariable Long id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Customer", id));
+        List<RewardPointsHistory> history = rewardPointsHistoryRepository.findByUserIdOrderByCreatedAtDesc(id);
+        Map<String, Object> data = new HashMap<>();
+        data.put("pointsBalance", user.getRewardPoints() != null ? user.getRewardPoints() : 0);
+        data.put("history", history);
+        return ResponseEntity.ok(ApiResponse.success(data));
+    }
+
+    @PostMapping("/customers/{id}/loyalty")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> adjustCustomerPoints(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> payload) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Customer", id));
+
+        int points = Integer.parseInt(payload.get("points").toString());
+        String actionType = (String) payload.get("actionType");
+        String description = (String) payload.get("description");
+
+        int currentBalance = user.getRewardPoints() != null ? user.getRewardPoints() : 0;
+        user.setRewardPoints(Math.max(0, currentBalance + points));
+        userRepository.save(user);
+
+        RewardPointsHistory history = RewardPointsHistory.builder()
+                .userId(user.getId())
+                .points(points)
+                .actionType(actionType != null ? actionType : "PROMOTION")
+                .description(description != null ? description : "Manual adjustment by Admin")
+                .createdAt(LocalDateTime.now())
+                .build();
+        rewardPointsHistoryRepository.save(history);
+
+        logAdminAction("Adjusted customer points for " + user.getName() + " by " + points, "User", String.valueOf(currentBalance), String.valueOf(user.getRewardPoints()));
+        return ResponseEntity.ok(ApiResponse.success(null, "Customer points adjusted successfully"));
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // PROVIDER MANAGEMENT
     // ─────────────────────────────────────────────────────────────────────────────
@@ -325,6 +367,37 @@ public class AdminController {
     @GetMapping("/providers/{id}/earnings")
     public ResponseEntity<ApiResponse<List<Transaction>>> getProviderEarnings(@PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(transactionRepository.findByProviderIdOrderByCreatedAtDesc(id)));
+    }
+
+    @GetMapping("/providers/{id}/incentives")
+    public ResponseEntity<ApiResponse<List<ProviderIncentive>>> getProviderIncentivesAdmin(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(providerIncentiveRepository.findByProviderIdOrderByCreatedAtDesc(id)));
+    }
+
+    @PostMapping("/providers/{id}/incentives")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> awardProviderIncentive(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> payload) {
+        Provider provider = providerRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
+
+        BigDecimal amount = new BigDecimal(payload.get("amount").toString());
+        String reason = (String) payload.get("reason");
+        String description = (String) payload.get("description");
+
+        ProviderIncentive incentive = ProviderIncentive.builder()
+                .providerId(provider.getId())
+                .amount(amount)
+                .reason(reason != null ? reason : "SPECIAL_CAMPAIGN")
+                .description(description != null ? description : "Manual performance bonus")
+                .status("PENDING_PAYOUT")
+                .createdAt(LocalDateTime.now())
+                .build();
+        providerIncentiveRepository.save(incentive);
+
+        logAdminAction("Awarded manual incentive to provider " + provider.getName() + " of Rs. " + amount, "Provider", "", String.valueOf(amount));
+        return ResponseEntity.ok(ApiResponse.success(null, "Incentive bonus awarded successfully"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -502,6 +575,15 @@ public class AdminController {
                 .orElseThrow(() -> ResourceNotFoundException.of("PayoutRequest", id));
         req.setStatus("RELEASED");
         payoutRequestRepository.save(req);
+
+        // Mark provider's pending incentives as PAID and link to this payout request
+        List<ProviderIncentive> pendingIncentives = providerIncentiveRepository.findByProviderIdAndStatus(req.getProviderId(), "PENDING_PAYOUT");
+        for (ProviderIncentive incentive : pendingIncentives) {
+            incentive.setStatus("PAID");
+            incentive.setPayoutId(id);
+            providerIncentiveRepository.save(incentive);
+        }
+
         logAdminAction("Released payout request #" + id, "PayoutRequest", "PENDING", "RELEASED");
         return ResponseEntity.ok(ApiResponse.success(null, "Payout released successfully"));
     }

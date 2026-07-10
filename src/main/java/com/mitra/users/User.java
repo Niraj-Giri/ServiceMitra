@@ -45,7 +45,12 @@ public class User {
     private String profilePhoto;
 
     @Column(name = "is_active")
+    @Builder.Default
     private Boolean isActive = true;
+
+    public Boolean getIsActive() {
+        return isActive == null || isActive;
+    }
 
     /**
      * Always "CUSTOMER" for users in this table.
@@ -53,6 +58,10 @@ public class User {
      */
     @Column(nullable = false)
     private String role;
+
+    @Column(name = "reward_points", nullable = false)
+    @Builder.Default
+    private Integer rewardPoints = 0;
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;

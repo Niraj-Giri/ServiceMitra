@@ -59,7 +59,12 @@ public class ServiceListing {
     private String whatExcluded;
 
     @Column(name = "is_active")
+    @Builder.Default
     private Boolean isActive = true;
+
+    public Boolean getIsActive() {
+        return isActive == null || isActive;
+    }
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;

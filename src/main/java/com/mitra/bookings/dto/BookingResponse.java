@@ -39,6 +39,10 @@ public class BookingResponse {
     private BigDecimal platformFee;
     private BigDecimal totalBill;
     private BigDecimal providerEarnings; // baseAmount - platformFee
+    
+    // Reward points
+    private Integer pointsRedeemed;
+    private BigDecimal pointsDiscountNpr;
 
     // OTP (only returned for customer's own booking when status = ACCEPTED)
     private String startOtp;
@@ -125,6 +129,8 @@ public class BookingResponse {
                 .platformFee(booking.getPlatformFee())
                 .totalBill(booking.getTotalBill())
                 .providerEarnings(providerEarnings)
+                .pointsRedeemed(booking.getPointsRedeemed())
+                .pointsDiscountNpr(booking.getPointsDiscountNpr())
                 .startOtp(showOtp && status == BookingStatus.ACCEPTED ? booking.getStartOtp() : null)
                 .startedAt(booking.getStartedAt())
                 .completedAt(booking.getCompletedAt())
