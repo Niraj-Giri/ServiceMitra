@@ -27,15 +27,18 @@ public interface TaskRequestRepository extends JpaRepository<TaskRequest, Long> 
         SELECT tr.* FROM task_requests tr
         WHERE tr.category = :category
           AND tr.status IN ('OPEN', 'QUOTING')
-          AND tr.latitude IS NOT NULL
-          AND tr.longitude IS NOT NULL
           AND (
-            6371 * ACOS(
-              COS(RADIANS(:lat)) * COS(RADIANS(tr.latitude)) *
-              COS(RADIANS(tr.longitude) - RADIANS(:lng)) +
-              SIN(RADIANS(:lat)) * SIN(RADIANS(tr.latitude))
-            )
-          ) <= :radiusKm
+            tr.latitude IS NULL OR tr.longitude IS NULL OR
+            (
+              6371 * ACOS(
+                LEAST(1.0, GREATEST(-1.0, 
+                  COS(RADIANS(:lat)) * COS(RADIANS(tr.latitude)) *
+                  COS(RADIANS(tr.longitude) - RADIANS(:lng)) +
+                  SIN(RADIANS(:lat)) * SIN(RADIANS(tr.latitude))
+                ))
+              )
+            ) <= :radiusKm
+          )
           AND tr.id NOT IN (
             SELECT q.task_request_id FROM quotes q
             WHERE q.provider_id = :providerId
