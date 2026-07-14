@@ -79,7 +79,11 @@ public class SecurityConfig {
         // SEC-02 FIX: Replace wildcard * with specific allowed origins.
         // Configured via CORS_ALLOWED_ORIGINS env variable.
         // Dev default: localhost Vite + React dev servers.
-        List<String> origins = Arrays.asList(allowedOriginsRaw.split(","));
+        List<String> rawOrigins = Arrays.asList(allowedOriginsRaw.split(","));
+        List<String> origins = new java.util.ArrayList<>(rawOrigins);
+        if (!origins.contains("https://service-mitra-frontend.vercel.app")) {
+            origins.add("https://service-mitra-frontend.vercel.app");
+        }
         configuration.setAllowedOrigins(origins);
 
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
