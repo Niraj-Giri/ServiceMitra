@@ -13,6 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import org.springframework.security.access.prepost.PreAuthorize;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -21,7 +22,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/providers")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class ProviderController {
 
     private final ProviderRepository providerRepository;
@@ -108,6 +109,7 @@ public class ProviderController {
      * Provider updates their own profile (online status, working hours, skills).
      */
     @PutMapping("/profile")
+    @PreAuthorize("hasRole('PROVIDER')")
     @Transactional
     public ResponseEntity<ApiResponse<Map<String, Object>>> updateProfile(
             HttpServletRequest httpRequest,
@@ -142,6 +144,7 @@ public class ProviderController {
      * Returns the provider's wallet balance and earnings summary.
      */
     @GetMapping("/earnings")
+    @PreAuthorize("hasRole('PROVIDER')")
     @Transactional(readOnly = true)
     public ResponseEntity<ApiResponse<Map<String, Object>>> getEarnings(
             HttpServletRequest httpRequest) {
@@ -161,14 +164,14 @@ public class ProviderController {
     }
 
     /**
-     * GET /api/v1/providers/{id} — Public provider profile.
+     * GET /api/v1/providers/{id} - Public provider profile.
      */
     @GetMapping("/{id}")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getPublicProfile(@PathVariable Long id) {
         Provider provider = providerRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
 
-        // Public profile — limited fields
+        // Public profile - limited fields
         Map<String, Object> profile = Map.of(
                 "id", provider.getId(),
                 "name", provider.getBusinessName(),

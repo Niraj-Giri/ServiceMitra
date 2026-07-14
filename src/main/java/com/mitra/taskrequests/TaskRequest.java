@@ -17,7 +17,13 @@ import java.util.List;
  * Status lifecycle: see TaskRequestStatus enum.
  */
 @Entity
-@Table(name = "task_requests")
+@Table(
+    name = "task_requests",
+    indexes = {
+        @Index(name = "idx_task_requests_user_id", columnList = "user_id"),
+        @Index(name = "idx_task_requests_status", columnList = "status")
+    }
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -74,6 +80,9 @@ public class TaskRequest {
     @Column(name = "preferred_date")
     private LocalDate preferredDate;
 
+    @Column(name = "preferred_slots", columnDefinition = "TEXT")
+    private String preferredSlots;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private TaskRequestStatus status;
@@ -114,6 +123,16 @@ public class TaskRequest {
     /** Final agreed amount (from accepted quote, after counter-offer if any). */
     @Column(name = "final_amount_npr", precision = 12, scale = 2)
     private BigDecimal finalAmountNpr;
+
+    @Column(name = "coupon_code", length = 50)
+    private String couponCode;
+
+    @Column(name = "coupon_discount_npr", precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal couponDiscountNpr = BigDecimal.ZERO;
+
+    @Column(name = "payment_method", length = 50)
+    private String paymentMethod;
 
     /** CUSTOMER | PROVIDER | ADMIN */
     @Column(name = "cancelled_by")

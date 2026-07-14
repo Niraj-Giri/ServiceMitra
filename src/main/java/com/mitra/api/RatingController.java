@@ -21,7 +21,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class RatingController {
 
     private final RatingService ratingService;
@@ -48,6 +48,40 @@ public class RatingController {
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success(rating, "Thank you for your feedback!"));
+    }
+
+    /**
+     * GET /api/v1/ratings/bookings/{bookingId}
+     * Customer fetches their review for a booking.
+     */
+    @GetMapping("/ratings/bookings/{bookingId}")
+    public ResponseEntity<ApiResponse<Rating>> getRatingByBookingId(
+            HttpServletRequest httpRequest,
+            @PathVariable Long bookingId) {
+        Long customerId = authService.extractUserIdFromToken(httpRequest);
+        Rating rating = ratingService.getRatingByBookingId(customerId, bookingId);
+        return ResponseEntity.ok(ApiResponse.success(rating));
+    }
+
+    /**
+     * PUT /api/v1/ratings/bookings/{bookingId}
+     * Customer edits their review for a booking.
+     */
+    @PutMapping("/ratings/bookings/{bookingId}")
+    public ResponseEntity<ApiResponse<Rating>> updateRating(
+            HttpServletRequest httpRequest,
+            @PathVariable Long bookingId,
+            @Valid @RequestBody SubmitRatingRequest request) {
+        Long customerId = authService.extractUserIdFromToken(httpRequest);
+        Rating rating = ratingService.updateRating(
+                customerId,
+                bookingId,
+                request.getPunctualityScore(),
+                request.getQualityScore(),
+                request.getBehaviorScore(),
+                request.getComment()
+        );
+        return ResponseEntity.ok(ApiResponse.success(rating, "Review updated successfully!"));
     }
 
     /**

@@ -229,10 +229,55 @@ public class DatabaseSeeder implements CommandLineRunner {
             jdbcTemplate.execute("DROP TABLE IF EXISTS provider_profiles");
             jdbcTemplate.execute("DROP TABLE IF EXISTS service_categories");
             jdbcTemplate.execute("DROP TABLE IF EXISTS service_subcategories");
+
+            // Drop old reviews -> bookings foreign key constraint if it exists
+            try {
+                jdbcTemplate.execute("ALTER TABLE reviews DROP FOREIGN KEY FK28an517hrxtt2bsg93uefugrm");
+                log.info("Dropped legacy reviews -> bookings foreign key constraint.");
+            } catch (Exception ex) {
+                // Ignore if it doesn't exist or was already dropped
+            }
+
+            // Add new reviews -> task_requests foreign key constraint
+            try {
+                jdbcTemplate.execute("ALTER TABLE reviews ADD CONSTRAINT FK_reviews_task_requests FOREIGN KEY (booking_id) REFERENCES task_requests (id)");
+                log.info("Successfully linked reviews table to task_requests table.");
+            } catch (Exception ex) {
+                // Ignore if already added
+            }
+
             jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 1");
-            log.info("Successfully dropped unused legacy tables: mechanics, provider_profiles, service_categories, service_subcategories");
+            log.info("Successfully dropped unused legacy tables and updated foreign key constraints.");
         } catch (Exception e) {
-            log.warn("Could not drop unused tables: {}", e.getMessage());
+            log.warn("Could not drop unused tables or migrate constraints: {}", e.getMessage());
+        }
+
+        try {
+            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
+            jdbcTemplate.execute("TRUNCATE TABLE booking_status_history");
+            jdbcTemplate.execute("TRUNCATE TABLE chat_messages");
+            jdbcTemplate.execute("TRUNCATE TABLE reviews");
+            jdbcTemplate.execute("TRUNCATE TABLE complaints");
+            jdbcTemplate.execute("TRUNCATE TABLE bookings");
+            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 1");
+            log.info("Successfully removed all legacy bookings and associated records from the database.");
+        } catch (Exception e) {
+            log.warn("Could not clean up legacy bookings: {}", e.getMessage());
+        }
+
+        try {
+            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
+            jdbcTemplate.execute("DELETE FROM quotes WHERE task_request_id IN (SELECT id FROM task_requests WHERE created_at < '2026-07-13 00:00:00')");
+            jdbcTemplate.execute("DELETE FROM chat_messages WHERE task_request_id IN (SELECT id FROM task_requests WHERE created_at < '2026-07-13 00:00:00')");
+            jdbcTemplate.execute("DELETE FROM transactions WHERE booking_id IN (SELECT id FROM task_requests WHERE created_at < '2026-07-13 00:00:00')");
+            jdbcTemplate.execute("DELETE FROM provider_incentives WHERE booking_id IN (SELECT id FROM task_requests WHERE created_at < '2026-07-13 00:00:00')");
+            jdbcTemplate.execute("DELETE FROM coupon_usages WHERE task_request_id IN (SELECT id FROM task_requests WHERE created_at < '2026-07-13 00:00:00')");
+            jdbcTemplate.execute("DELETE FROM complaints WHERE booking_id IN (SELECT id FROM task_requests WHERE created_at < '2026-07-13 00:00:00')");
+            jdbcTemplate.execute("DELETE FROM task_requests WHERE created_at < '2026-07-13 00:00:00'");
+            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 1");
+            log.info("Successfully deleted all marketplace task requests (bookings) created before 13 July 2026.");
+        } catch (Exception e) {
+            log.warn("Could not clean up legacy task requests: {}", e.getMessage());
         }
 
         log.info("Database schema check complete. Validating default service seeds...");

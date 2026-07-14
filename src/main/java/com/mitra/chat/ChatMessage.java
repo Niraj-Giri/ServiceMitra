@@ -20,10 +20,12 @@ public class ChatMessage {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "booking_id", nullable = true)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private Booking booking;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "task_request_id", nullable = true)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private com.mitra.taskrequests.TaskRequest taskRequest;
 
     @Column(name = "sender_id", nullable = false)

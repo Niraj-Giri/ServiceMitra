@@ -14,6 +14,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import org.springframework.security.access.prepost.PreAuthorize;
 import java.util.List;
 import java.util.Map;
 
@@ -34,21 +35,18 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/bookings")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class BookingController {
 
     private final BookingService bookingService;
     private final AuthService authService;
 
-    // ─────────────────────────────────────────────────────────────────────────────
-    // CUSTOMER ENDPOINTS
-    // ─────────────────────────────────────────────────────────────────────────────
-
+    // ----------------------------------------------------------------------------
     /**
-     * POST /api/v1/bookings
      * Customer creates a new booking.
      */
     @PostMapping
+    @PreAuthorize("hasRole('CUSTOMER')")
     public ResponseEntity<ApiResponse<BookingResponse>> createBooking(
             HttpServletRequest httpRequest,
             @Valid @RequestBody CreateBookingRequest request) {
@@ -67,6 +65,7 @@ public class BookingController {
      * Customer's bookings list. Matches frontend apiClient call.
      */
     @GetMapping("/user")
+    @PreAuthorize("hasRole('CUSTOMER')")
     public ResponseEntity<ApiResponse<List<BookingResponse>>> getUserBookings(
             HttpServletRequest httpRequest) {
 
@@ -80,6 +79,7 @@ public class BookingController {
      * Customer fetches a single booking (includes OTP when status = ACCEPTED).
      */
     @GetMapping("/{id}")
+    @PreAuthorize("hasRole('CUSTOMER')")
     public ResponseEntity<ApiResponse<BookingResponse>> getBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id) {
@@ -94,6 +94,7 @@ public class BookingController {
      * Customer cancels their booking.
      */
     @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasRole('CUSTOMER')")
     public ResponseEntity<ApiResponse<Void>> cancelBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id,
@@ -110,6 +111,7 @@ public class BookingController {
      * Customer reschedules their booking.
      */
     @PostMapping("/{id}/reschedule")
+    @PreAuthorize("hasRole('CUSTOMER')")
     public ResponseEntity<ApiResponse<BookingResponse>> rescheduleBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id,
@@ -126,15 +128,16 @@ public class BookingController {
         return ResponseEntity.ok(ApiResponse.success(response, "Booking rescheduled successfully"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // PROVIDER ENDPOINTS
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     /**
      * GET /api/v1/bookings/provider
      * Provider's bookings list. Matches frontend dashboard call.
      */
     @GetMapping("/provider")
+    @PreAuthorize("hasRole('PROVIDER')")
     public ResponseEntity<ApiResponse<List<BookingResponse>>> getProviderBookings(
             HttpServletRequest httpRequest) {
 
@@ -148,6 +151,7 @@ public class BookingController {
      * Provider fetches single booking detail.
      */
     @GetMapping("/provider/{id}")
+    @PreAuthorize("hasRole('PROVIDER')")
     public ResponseEntity<ApiResponse<BookingResponse>> getProviderBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id) {
@@ -162,6 +166,7 @@ public class BookingController {
      * Provider accepts an assigned booking. Matches frontend.
      */
     @PutMapping("/{id}/accept")
+    @PreAuthorize("hasRole('PROVIDER')")
     public ResponseEntity<ApiResponse<BookingResponse>> acceptBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id) {
@@ -176,6 +181,7 @@ public class BookingController {
      * Provider rejects an assigned booking. Matches frontend.
      */
     @PutMapping("/{id}/reject")
+    @PreAuthorize("hasRole('PROVIDER')")
     public ResponseEntity<ApiResponse<Void>> rejectBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id,
@@ -192,6 +198,7 @@ public class BookingController {
      * Provider enters OTP from customer to officially start the job. Matches frontend.
      */
     @PutMapping("/{id}/start")
+    @PreAuthorize("hasRole('PROVIDER')")
     public ResponseEntity<ApiResponse<BookingResponse>> startBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id,
@@ -207,6 +214,7 @@ public class BookingController {
      * Provider marks the job as complete. Triggers earning credit. Matches frontend.
      */
     @RequestMapping(value = "/{id}/complete", method = {RequestMethod.POST, RequestMethod.PUT})
+    @PreAuthorize("hasRole('PROVIDER')")
     public ResponseEntity<ApiResponse<BookingResponse>> completeBooking(
             HttpServletRequest httpRequest,
             @PathVariable Long id) {
@@ -221,6 +229,7 @@ public class BookingController {
      * Provider cancels a booking they had accepted.
      */
     @PostMapping("/{id}/provider-cancel")
+    @PreAuthorize("hasRole('PROVIDER')")
     public ResponseEntity<ApiResponse<Void>> providerCancel(
             HttpServletRequest httpRequest,
             @PathVariable Long id,

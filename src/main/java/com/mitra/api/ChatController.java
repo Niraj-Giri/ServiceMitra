@@ -33,7 +33,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/chat/bookings/{bookingId}/messages")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class ChatController {
 
     private final ChatMessageRepository chatMessageRepository;

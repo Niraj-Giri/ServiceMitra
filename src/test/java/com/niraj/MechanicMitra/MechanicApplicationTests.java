@@ -16,20 +16,22 @@ class MechanicApplicationTests {
 	}
 
 	@org.springframework.beans.factory.annotation.Autowired
-	private com.mitra.taskrequests.TaskRequestService taskRequestService;
+	private com.mitra.users.ProviderRepository providerRepository;
 
 	@Test
 	void dbTest() {
 		try {
-			System.out.println("====== ATTEMPTING START TASK SERVICE DIRECTLY ======");
-			// Task 1 status is ACCEPTED, acceptedQuoteId is 2 (provider 9)
-			taskRequestService.startTask(9L, 1L);
-			System.out.println("SUCCESS: Task started successfully!");
+			System.out.println("====== JPQL findProviders TEST ======");
+			org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(0, 10);
+			org.springframework.data.domain.Page<com.mitra.users.Provider> res = providerRepository.findProviders("", "", pageable);
+			System.out.println("RESULT COUNT: " + res.getTotalElements());
+			for (com.mitra.users.Provider p : res.getContent()) {
+				System.out.println(" - " + p.getId() + ": " + p.getBusinessName() + " (" + p.getStatus() + ")");
+			}
+			System.out.println("=========================================");
 		} catch (Exception e) {
-			System.out.println("EXCEPTION THROWN: " + e.getClass().getName() + " - " + e.getMessage());
 			e.printStackTrace();
 		}
-		System.out.println("=========================================");
 	}
 
 }

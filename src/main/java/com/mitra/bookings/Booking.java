@@ -21,7 +21,14 @@ import java.time.LocalDateTime;
  *   This is used by BookingDispatchService to skip already-rejected providers.
  */
 @Entity
-@Table(name = "bookings")
+@Table(
+    name = "bookings",
+    indexes = {
+        @Index(name = "idx_bookings_user_id", columnList = "user_id"),
+        @Index(name = "idx_bookings_provider_id", columnList = "provider_id"),
+        @Index(name = "idx_bookings_status", columnList = "status")
+    }
+)
 @Getter
 @Setter
 @NoArgsConstructor

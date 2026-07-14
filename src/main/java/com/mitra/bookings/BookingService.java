@@ -350,12 +350,13 @@ public class BookingService {
         // 2. Update Provider Stats & Milestones
         Provider provider = booking.getProvider();
         if (provider != null) {
-            int newTotalJobs = provider.getTotalJobs() + 1;
+            int currentTotalJobs = provider.getTotalJobs() != null ? provider.getTotalJobs() : 0;
+            int newTotalJobs = currentTotalJobs + 1;
             provider.setTotalJobs(newTotalJobs);
             providerRepository.save(provider);
 
             // Automate Provider Milestone: 5 Completed Bookings = Rs 500 Bonus
-            if (newTotalJobs % 5 == 0) {
+            if (newTotalJobs > 0 && newTotalJobs % 5 == 0) {
                 ProviderIncentive milestoneBonus = ProviderIncentive.builder()
                         .providerId(provider.getId())
                         .amount(new BigDecimal("500.00"))

@@ -18,7 +18,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/users")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class UserController {
 
     private final UserRepository userRepository;

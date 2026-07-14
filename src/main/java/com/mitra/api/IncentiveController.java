@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -18,7 +19,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/incentives")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+@PreAuthorize("hasRole('PROVIDER')")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class IncentiveController {
 
     private final AuthService authService;

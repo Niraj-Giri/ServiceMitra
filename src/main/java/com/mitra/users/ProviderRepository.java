@@ -29,6 +29,20 @@ public interface ProviderRepository extends JpaRepository<Provider, Long> {
     """)
     List<Provider> findEligibleProviders(@Param("category") String category);
 
+    @org.springframework.data.jpa.repository.Query("""
+        SELECT p FROM Provider p
+        WHERE (:status IS NULL OR :status = '' OR p.status = :status)
+          AND (:search IS NULL OR :search = '' OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR LOWER(p.businessName) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR LOWER(p.phone) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR LOWER(p.email) LIKE LOWER(CONCAT('%', :search, '%')))
+    """)
+    org.springframework.data.domain.Page<Provider> findProviders(
+        @Param("status") String status,
+        @Param("search") String search,
+        org.springframework.data.domain.Pageable pageable
+    );
+
     /**
      * Count providers by status — for admin dashboard analytics.
      */

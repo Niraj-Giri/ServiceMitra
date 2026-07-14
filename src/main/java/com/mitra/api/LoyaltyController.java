@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -24,7 +25,8 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/loyalty")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+@PreAuthorize("hasRole('CUSTOMER')")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class LoyaltyController {
 
     private final AuthService authService;
@@ -44,8 +46,14 @@ public class LoyaltyController {
 
         List<RewardPointsHistory> history = rewardPointsHistoryRepository.findByUserIdOrderByCreatedAtDesc(userId);
 
+        PlatformSettings settings = platformSettingsRepository.findById(1L).orElse(null);
+        double conversionRate = settings != null && settings.getPointsRedemptionRate() != null
+                ? settings.getPointsRedemptionRate().doubleValue()
+                : 1.0;
+
         Map<String, Object> summary = new HashMap<>();
         summary.put("pointsBalance", user.getRewardPoints() != null ? user.getRewardPoints() : 0);
+        summary.put("pointsRedemptionRate", conversionRate);
         summary.put("history", history);
 
         return ResponseEntity.ok(ApiResponse.success(summary));

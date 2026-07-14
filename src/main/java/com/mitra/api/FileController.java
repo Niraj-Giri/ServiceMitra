@@ -3,6 +3,7 @@ package com.mitra.api;
 import com.mitra.files.FileStorageService;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,7 +17,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/files")
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed -- CORS is centrally managed in SecurityConfig
 public class FileController {
 
     private final FileStorageService fileStorageService;
@@ -25,43 +26,63 @@ public class FileController {
         this.fileStorageService = fileStorageService;
     }
 
+    /**
+     * Upload a file. Requires authentication (enforced by SecurityConfig).
+     * SEC-06: FileStorageService validates MIME type and file size.
+     */
     @PostMapping("/upload")
     public ResponseEntity<Map<String, String>> uploadFile(@RequestParam("file") MultipartFile file) {
-        String fileNameOrUrl = fileStorageService.storeFile(file);
+        try {
+            String fileNameOrUrl = fileStorageService.storeFile(file);
 
-        String fileUrl = fileNameOrUrl;
-        if (fileNameOrUrl != null && !fileNameOrUrl.startsWith("http")) {
-            fileUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
-                    .path("/api/v1/files/")
-                    .path(fileNameOrUrl)
-                    .toUriString();
+            String fileUrl = fileNameOrUrl;
+            if (fileNameOrUrl != null && !fileNameOrUrl.startsWith("http")) {
+                fileUrl = ServletUriComponentsBuilder.fromCurrentContextPath()
+                        .path("/api/v1/files/")
+                        .path(fileNameOrUrl)
+                        .toUriString();
+            }
+
+            Map<String, String> response = new HashMap<>();
+            response.put("fileName", fileNameOrUrl);
+            response.put("fileUrl", fileUrl);
+            return ResponseEntity.ok(response);
+
+        } catch (IllegalArgumentException ex) {
+            // File type or size validation failed
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", ex.getMessage()));
         }
-
-        Map<String, String> response = new HashMap<>();
-        response.put("fileName", fileNameOrUrl);
-        response.put("fileUrl", fileUrl);
-
-        return ResponseEntity.ok(response);
     }
 
+    /**
+     * Download/serve a local file.
+     * SEC-06d: Path traversal protection enforced in FileStorageService.
+     */
     @GetMapping("/{fileName:.+}")
     public ResponseEntity<Resource> downloadFile(@PathVariable String fileName, HttpServletRequest request) {
-        Resource resource = fileStorageService.loadFileAsResource(fileName);
-
-        String contentType = null;
         try {
-            contentType = request.getServletContext().getMimeType(resource.getFile().getAbsolutePath());
-        } catch (IOException ex) {
-            // Do nothing
-        }
+            Resource resource = fileStorageService.loadFileAsResource(fileName);
 
-        if (contentType == null) {
-            contentType = "application/octet-stream";
-        }
+            String contentType = null;
+            try {
+                contentType = request.getServletContext().getMimeType(resource.getFile().getAbsolutePath());
+            } catch (IOException ex) {
+                // Could not determine MIME type
+            }
 
-        return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(contentType))
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
-                .body(resource);
+            if (contentType == null) {
+                contentType = "application/octet-stream";
+            }
+
+            return ResponseEntity.ok()
+                    .contentType(MediaType.parseMediaType(contentType))
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+                    .body(resource);
+
+        } catch (SecurityException ex) {
+            // Path traversal attempt detected -- return 400
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        }
     }
 }

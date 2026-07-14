@@ -1,11 +1,11 @@
 package com.mitra.reviews;
 
-import com.mitra.bookings.Booking;
-import com.mitra.bookings.BookingRepository;
-import com.mitra.bookings.BookingStatus;
 import com.mitra.common.BadRequestException;
 import com.mitra.common.ForbiddenException;
 import com.mitra.common.ResourceNotFoundException;
+import com.mitra.taskrequests.TaskRequest;
+import com.mitra.taskrequests.TaskRequestRepository;
+import com.mitra.taskrequests.TaskRequestStatus;
 import com.mitra.users.Provider;
 import com.mitra.users.ProviderRepository;
 import lombok.RequiredArgsConstructor;
@@ -23,11 +23,11 @@ import java.util.Map;
 public class RatingService {
 
     private final RatingRepository ratingRepository;
-    private final BookingRepository bookingRepository;
+    private final TaskRequestRepository taskRequestRepository;
     private final ProviderRepository providerRepository;
 
     /**
-     * Submits a rating for a completed booking.
+     * Submits a rating for a completed booking/task.
      *
      * Rules:
      * 1. Only customer of the booking can rate
@@ -45,19 +45,24 @@ public class RatingService {
         validateScore(quality, "Quality");
         validateScore(behavior, "Behavior");
 
-        // Get booking and verify ownership + status
-        Booking booking = bookingRepository.findById(bookingId)
+        // Get task request and verify ownership + status
+        TaskRequest task = taskRequestRepository.findById(bookingId)
                 .orElseThrow(() -> ResourceNotFoundException.of("Booking", bookingId));
 
-        if (booking.getUser() == null || !booking.getUser().getId().equals(customerId)) {
+        if (task.getUser() == null || !task.getUser().getId().equals(customerId)) {
             throw ForbiddenException.notYourResource("booking");
         }
 
-        if (booking.getStatus() != BookingStatus.COMPLETED) {
+        if (task.getStatus() != TaskRequestStatus.COMPLETED) {
             throw new BadRequestException("You can only rate a completed booking.");
         }
 
-        if (booking.getProvider() == null) {
+        var acceptedQuote = task.getQuotes().stream()
+                .filter(q -> q.getId().equals(task.getAcceptedQuoteId()))
+                .findFirst()
+                .orElseThrow(() -> new BadRequestException("Cannot rate a booking with no assigned provider."));
+
+        if (acceptedQuote.getProvider() == null) {
             throw new BadRequestException("Cannot rate a booking with no assigned provider.");
         }
 
@@ -71,7 +76,7 @@ public class RatingService {
         Rating rating = Rating.builder()
                 .bookingId(bookingId)
                 .customerId(customerId)
-                .providerId(booking.getProvider().getId())
+                .providerId(acceptedQuote.getProvider().getId())
                 .punctualityScore(punctuality)
                 .qualityScore(quality)
                 .behaviorScore(behavior)
@@ -83,10 +88,10 @@ public class RatingService {
         rating = ratingRepository.save(rating);
 
         // Recalculate provider's rating average
-        updateProviderRatingCache(booking.getProvider().getId());
+        updateProviderRatingCache(acceptedQuote.getProvider().getId());
 
         log.info("Rating submitted for booking {} → provider {}. Overall: {}",
-                bookingId, booking.getProvider().getId(), overall);
+                bookingId, acceptedQuote.getProvider().getId(), overall);
 
         return rating;
     }
@@ -109,6 +114,49 @@ public class RatingService {
                         "createdAt", r.getCreatedAt()
                 ))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Rating getRatingByBookingId(Long customerId, Long bookingId) {
+        Rating rating = ratingRepository.findByBookingId(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Rating not found for booking ID: " + bookingId));
+        if (!rating.getCustomerId().equals(customerId)) {
+            throw ForbiddenException.notYourResource("rating");
+        }
+        return rating;
+    }
+
+    @Transactional
+    public Rating updateRating(Long customerId, Long bookingId,
+                               int punctuality, int quality, int behavior,
+                               String comment) {
+        validateScore(punctuality, "Punctuality");
+        validateScore(quality, "Quality");
+        validateScore(behavior, "Behavior");
+
+        Rating rating = ratingRepository.findByBookingId(bookingId)
+                .orElseThrow(() -> new ResourceNotFoundException("Rating not found for booking ID: " + bookingId));
+
+        if (!rating.getCustomerId().equals(customerId)) {
+            throw ForbiddenException.notYourResource("rating");
+        }
+
+        BigDecimal overall = Rating.calculateOverall(punctuality, quality, behavior);
+
+        rating.setPunctualityScore(punctuality);
+        rating.setQualityScore(quality);
+        rating.setBehaviorScore(behavior);
+        rating.setOverallScore(overall);
+        rating.setComment(comment);
+
+        rating = ratingRepository.save(rating);
+
+        updateProviderRatingCache(rating.getProviderId());
+
+        log.info("Rating updated for booking {} → provider {}. Overall: {}",
+                bookingId, rating.getProviderId(), overall);
+
+        return rating;
     }
 
     /**

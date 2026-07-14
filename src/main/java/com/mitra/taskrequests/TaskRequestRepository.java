@@ -9,6 +9,7 @@ import java.util.List;
 public interface TaskRequestRepository extends JpaRepository<TaskRequest, Long> {
 
     /** Customer's own tasks, newest first. */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"user"})
     List<TaskRequest> findByUserIdOrderByCreatedAtDesc(Long userId);
 
     /**
@@ -55,11 +56,14 @@ public interface TaskRequestRepository extends JpaRepository<TaskRequest, Long> 
     );
 
     /** Admin — list tasks by status. */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"user"})
     List<TaskRequest> findByStatusOrderByCreatedAtDesc(TaskRequestStatus status);
 
     /** Admin — all tasks newest first. */
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"user"})
     List<TaskRequest> findAllByOrderByCreatedAtDesc();
 
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"user"})
     @Query("SELECT tr FROM TaskRequest tr JOIN Quote q ON tr.acceptedQuoteId = q.id WHERE q.provider.id = :providerId ORDER BY tr.createdAt DESC")
     List<TaskRequest> findAssignedTasksForProvider(@Param("providerId") Long providerId);
 }

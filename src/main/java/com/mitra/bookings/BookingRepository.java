@@ -63,6 +63,20 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
 
     Page<Booking> findByStatusOrderByCreatedAtDesc(BookingStatus status, Pageable pageable);
 
+    @Query("""
+        SELECT b FROM Booking b
+        WHERE (:status IS NULL OR b.status = :status)
+          AND (:search IS NULL OR :search = '' OR CAST(b.id AS string) LIKE CONCAT('%', :search, '%')
+                             OR LOWER(b.user.name) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR (b.provider IS NOT NULL AND LOWER(b.provider.businessName) LIKE LOWER(CONCAT('%', :search, '%')))
+                             OR LOWER(b.serviceName) LIKE LOWER(CONCAT('%', :search, '%')))
+    """)
+    Page<Booking> findBookings(
+        @Param("status") BookingStatus status,
+        @Param("search") String search,
+        Pageable pageable
+    );
+
     // ─── Analytics ────────────────────────────────────────────────────────────────
 
     long countByStatus(BookingStatus status);

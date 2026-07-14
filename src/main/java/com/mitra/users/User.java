@@ -13,7 +13,13 @@ import java.time.LocalDateTime;
  * 'role' column defaults to 'CUSTOMER' — only used for legacy data.
  */
 @Entity
-@Table(name = "users")
+@Table(
+    name = "users",
+    indexes = {
+        @Index(name = "idx_users_phone", columnList = "phone"),
+        @Index(name = "idx_users_email", columnList = "email")
+    }
+)
 @Getter
 @Setter
 @NoArgsConstructor
@@ -62,6 +68,10 @@ public class User {
     @Column(name = "reward_points", nullable = false)
     @Builder.Default
     private Integer rewardPoints = 0;
+
+    @Column(name = "is_deleted", nullable = false)
+    @Builder.Default
+    private Boolean isDeleted = false;
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;

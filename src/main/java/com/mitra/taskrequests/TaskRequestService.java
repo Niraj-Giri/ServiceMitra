@@ -16,6 +16,7 @@ import com.mitra.users.ProviderIncentiveRepository;
 import com.mitra.users.ProviderRepository;
 import com.mitra.users.User;
 import com.mitra.users.UserRepository;
+import com.mitra.bookings.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -56,6 +57,9 @@ public class TaskRequestService {
     private final PlatformSettingsRepository platformSettingsRepository;
     private final RewardPointsHistoryRepository rewardPointsHistoryRepository;
     private final ProviderIncentiveRepository providerIncentiveRepository;
+    private final CouponRepository couponRepository;
+    private final CouponUsageRepository couponUsageRepository;
+    private final TransactionRepository transactionRepository;
 
     // ─────────────────────────────────────────────────────────────────────────────
     // CUSTOMER: CREATE TASK
@@ -77,26 +81,40 @@ public class TaskRequestService {
             throw new BadRequestException("This service is currently unavailable.");
         }
 
-        if (req.getBudgetMinNpr().compareTo(BigDecimal.ZERO) <= 0) {
+        if (req.getBudgetMinNpr() == null || req.getBudgetMinNpr().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BadRequestException("Budget must be greater than zero.");
         }
-        if (req.getBudgetMaxNpr().compareTo(req.getBudgetMinNpr()) < 0) {
-            throw new BadRequestException("Maximum budget must be >= minimum budget.");
+        if (req.getPreferredSlots() == null || req.getPreferredSlots().isEmpty()) {
+            throw new BadRequestException("At least one preferred date and time slot is required.");
+        }
+        BigDecimal budgetMax = req.getBudgetMaxNpr() != null ? req.getBudgetMaxNpr() : req.getBudgetMinNpr();
+        if (budgetMax.compareTo(req.getBudgetMinNpr()) < 0) {
+            budgetMax = req.getBudgetMinNpr();
         }
 
         // Handle reward points redemption
         int pointsToRedeem = req.getPointsToRedeem() != null ? req.getPointsToRedeem() : 0;
         BigDecimal pointsDiscount = BigDecimal.ZERO;
         if (pointsToRedeem > 0) {
-            if (pointsToRedeem > user.getRewardPoints()) {
-                throw new BadRequestException("Insufficient reward points. You have " + user.getRewardPoints() + " points.");
+            int currentPoints = user.getRewardPoints() != null ? user.getRewardPoints() : 0;
+            if (pointsToRedeem > currentPoints) {
+                throw new BadRequestException("Insufficient reward points. You have " + currentPoints + " points.");
             }
             PlatformSettings settings = getPlatformSettings();
+            BigDecimal redemptionRate = settings.getPointsRedemptionRate() != null
+                    ? settings.getPointsRedemptionRate()
+                    : BigDecimal.ONE;
+            BigDecimal maxDiscount = service.getBasePrice();
             pointsDiscount = BigDecimal.valueOf(pointsToRedeem)
-                    .multiply(settings.getPointsRedemptionRate())
+                    .multiply(redemptionRate)
                     .setScale(2, RoundingMode.HALF_UP);
 
-            user.setRewardPoints(user.getRewardPoints() - pointsToRedeem);
+            if (pointsDiscount.compareTo(maxDiscount) > 0) {
+                pointsDiscount = maxDiscount;
+                pointsToRedeem = (int) Math.ceil(maxDiscount.doubleValue() / redemptionRate.doubleValue());
+            }
+
+            user.setRewardPoints(currentPoints - pointsToRedeem);
             rewardPointsHistoryRepository.save(RewardPointsHistory.builder()
                     .userId(userId)
                     .points(-pointsToRedeem)
@@ -114,11 +132,12 @@ public class TaskRequestService {
                 .title(req.getTitle())
                 .description(req.getDescription())
                 .budgetMinNpr(req.getBudgetMinNpr())
-                .budgetMaxNpr(req.getBudgetMaxNpr())
+                .budgetMaxNpr(budgetMax)
                 .address(req.getAddress())
                 .latitude(req.getLatitude())
                 .longitude(req.getLongitude())
                 .preferredDate(req.getPreferredDate())
+                .preferredSlots(String.join(",", req.getPreferredSlots()))
                 .status(TaskRequestStatus.OPEN)
                 .pointsRedeemed(pointsToRedeem)
                 .pointsDiscountNpr(pointsDiscount)
@@ -182,7 +201,8 @@ public class TaskRequestService {
         // Refund reward points if any were redeemed
         if (task.getPointsRedeemed() != null && task.getPointsRedeemed() > 0) {
             User user = task.getUser();
-            user.setRewardPoints(user.getRewardPoints() + task.getPointsRedeemed());
+            int currentPoints = user.getRewardPoints() != null ? user.getRewardPoints() : 0;
+            user.setRewardPoints(currentPoints + task.getPointsRedeemed());
             rewardPointsHistoryRepository.save(RewardPointsHistory.builder()
                     .userId(userId)
                     .points(task.getPointsRedeemed())
@@ -245,15 +265,41 @@ public class TaskRequestService {
             throw new BadRequestException("This task is no longer accepting quotes (status: " + task.getStatus() + ").");
         }
 
-        // Check for duplicate active quote
-        boolean alreadyQuoted = quoteRepository.existsByTaskRequestIdAndProviderIdAndStatusNotIn(
-                taskId, providerId, List.of(QuoteStatus.WITHDRAWN, QuoteStatus.REJECTED, QuoteStatus.EXPIRED));
-        if (alreadyQuoted) {
-            throw new BadRequestException("You already have an active quote for this task.");
+        if (req.getQuotedPriceNpr() == null || req.getQuotedPriceNpr().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new BadRequestException("Quote price must be greater than zero.");
         }
 
-        if (req.getQuotedPriceNpr().compareTo(BigDecimal.ZERO) <= 0) {
-            throw new BadRequestException("Quote price must be greater than zero.");
+        BigDecimal maxPrice = task.getBudgetMinNpr().multiply(new BigDecimal("4"));
+        if (req.getQuotedPriceNpr().compareTo(maxPrice) > 0) {
+            throw new BadRequestException("Quote price cannot exceed 4 times the customer's budget (maximum allowed: Rs. " + maxPrice + ").");
+        }
+
+        // Check if provider already has a quote for this task (active or inactive)
+        java.util.Optional<Quote> existingQuoteOpt = quoteRepository.findByTaskRequestIdAndProviderId(taskId, providerId);
+        if (existingQuoteOpt.isPresent()) {
+            Quote existing = existingQuoteOpt.get();
+            if (existing.getStatus() == QuoteStatus.ACCEPTED) {
+                throw new BadRequestException("You cannot update a quote that has already been accepted.");
+            }
+            // Update the existing quote (or reactivate if it was withdrawn/rejected/expired)
+            existing.setQuotedPriceNpr(req.getQuotedPriceNpr());
+            if (req.getMessage() != null) {
+                existing.setMessage(req.getMessage());
+            }
+            existing.setCounterPriceNpr(null); // Clear counter price if they update their bid
+            existing.setStatus(QuoteStatus.PENDING); // Reset to PENDING
+            existing.setUpdatedAt(LocalDateTime.now());
+            
+            existing = quoteRepository.save(existing);
+            
+            // Move task to QUOTING if it was OPEN
+            if (task.getStatus() == TaskRequestStatus.OPEN) {
+                task.setStatus(TaskRequestStatus.QUOTING);
+                taskRequestRepository.save(task);
+            }
+            
+            log.info("Provider {} updated/resubmitted quote {} (NPR {}) for task {}", providerId, existing.getId(), req.getQuotedPriceNpr(), taskId);
+            return QuoteResponse.from(existing);
         }
 
         Quote quote = Quote.builder()
@@ -317,6 +363,153 @@ public class TaskRequestService {
         return TaskResponse.from(task, true);
     }
 
+    @Transactional
+    public TaskResponse checkoutTaskRequest(Long userId, Long taskId, Long quoteId, TaskCheckoutRequest req) {
+        TaskRequest task = getTaskOrThrow(taskId);
+        assertOwner(task, userId);
+
+        if (task.getStatus() != TaskRequestStatus.QUOTING && task.getStatus() != TaskRequestStatus.OPEN) {
+            throw new BadRequestException("Task must be in OPEN or QUOTING state to proceed to checkout.");
+        }
+
+        Quote quote = quoteRepository.findById(quoteId)
+                .orElseThrow(() -> ResourceNotFoundException.of("Quote", quoteId));
+        assertQuoteBelongsToTask(quote, taskId);
+
+        if (quote.getStatus() != QuoteStatus.PENDING && quote.getStatus() != QuoteStatus.COUNTER_OFFERED) {
+            throw new BadRequestException("Only PENDING or COUNTER_OFFERED quotes can be accepted.");
+        }
+
+        BigDecimal bidAmount = quote.getCounterPriceNpr() != null ? quote.getCounterPriceNpr() : quote.getQuotedPriceNpr();
+
+        // 1. Calculate Coupon Discount
+        BigDecimal couponDiscount = BigDecimal.ZERO;
+        Coupon coupon = null;
+        if (req.getCouponCode() != null && !req.getCouponCode().isBlank()) {
+            // SEC-10: Use pessimistic write lock to prevent concurrent double-spend.
+            // Without the lock two simultaneous checkouts can both pass the usage
+            // count check before either one saves a CouponUsage record.
+            coupon = couponRepository.findByCodeIgnoreCaseForUpdate(req.getCouponCode().trim())
+                    .orElseThrow(() -> new BadRequestException("Invalid coupon code: " + req.getCouponCode()));
+            
+            if (Boolean.FALSE.equals(coupon.getIsActive())) {
+                throw new BadRequestException("This coupon code is inactive.");
+            }
+            if (coupon.isExpired()) {
+                throw new BadRequestException("This coupon has expired.");
+            }
+            if (bidAmount.compareTo(coupon.getMinBookingAmount()) < 0) {
+                throw new BadRequestException("Minimum booking amount of Rs. " + coupon.getMinBookingAmount() + " is required to apply this coupon.");
+            }
+            if (coupon.getApplicableCategory() != null && !coupon.getApplicableCategory().isBlank() 
+                    && !coupon.getApplicableCategory().equalsIgnoreCase("ALL")
+                    && !coupon.getApplicableCategory().equalsIgnoreCase(task.getCategory())) {
+                throw new BadRequestException("This coupon is only applicable to " + coupon.getApplicableCategory() + " services.");
+            }
+            
+            // Check usage limit (total global)
+            if (coupon.getUsageLimit() > 0) {
+                long totalUsage = couponUsageRepository.countByCouponId(coupon.getId());
+                if (totalUsage >= coupon.getUsageLimit()) {
+                    throw new BadRequestException("This coupon limit has been fully reached.");
+                }
+            }
+            // Check usage per customer
+            if (coupon.getUsagePerCustomer() > 0) {
+                long customerUsage = couponUsageRepository.countByCouponIdAndUserId(coupon.getId(), userId);
+                if (customerUsage >= coupon.getUsagePerCustomer()) {
+                    throw new BadRequestException("You have already reached the limit of using this coupon.");
+                }
+            }
+
+            // Calculate discount
+            if ("FLAT".equalsIgnoreCase(coupon.getDiscountType())) {
+                couponDiscount = coupon.getDiscountValue();
+            } else if ("PERCENTAGE".equalsIgnoreCase(coupon.getDiscountType())) {
+                BigDecimal pct = coupon.getDiscountValue().divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP);
+                couponDiscount = bidAmount.multiply(pct).setScale(2, RoundingMode.HALF_UP);
+                if (coupon.getMaxDiscount() != null && coupon.getMaxDiscount().compareTo(BigDecimal.ZERO) > 0) {
+                    couponDiscount = couponDiscount.min(coupon.getMaxDiscount());
+                }
+            }
+            couponDiscount = couponDiscount.min(bidAmount);
+        }
+
+        // 2. Calculate Loyalty Points Discount
+        BigDecimal pointsDiscount = BigDecimal.ZERO;
+        int pointsRedeemed = 0;
+        User user = task.getUser();
+        if (Boolean.TRUE.equals(req.getRedeemPoints()) && user.getRewardPoints() != null && user.getRewardPoints() > 0) {
+            PlatformSettings settings = getPlatformSettings();
+            BigDecimal rate = settings.getPointsRedemptionRate() != null ? settings.getPointsRedemptionRate() : BigDecimal.ONE;
+            BigDecimal availableDiscount = new BigDecimal(user.getRewardPoints()).multiply(rate);
+            
+            // Limit points discount to the remaining amount after coupon discount
+            BigDecimal maxPointsDiscount = bidAmount.subtract(couponDiscount).max(BigDecimal.ZERO);
+            pointsDiscount = availableDiscount.min(maxPointsDiscount).setScale(2, RoundingMode.HALF_UP);
+            
+            if (pointsDiscount.compareTo(BigDecimal.ZERO) > 0) {
+                pointsRedeemed = pointsDiscount.divide(rate, 0, RoundingMode.HALF_UP).intValue();
+            }
+        }
+
+        BigDecimal payableAmount = bidAmount.subtract(couponDiscount).subtract(pointsDiscount).max(BigDecimal.ZERO);
+
+        // Deduct loyalty points from user if redeemed
+        if (pointsRedeemed > 0) {
+            int currentPoints = user.getRewardPoints() != null ? user.getRewardPoints() : 0;
+            user.setRewardPoints(currentPoints - pointsRedeemed);
+            userRepository.save(user);
+
+            rewardPointsHistoryRepository.save(RewardPointsHistory.builder()
+                    .userId(user.getId())
+                    .points(-pointsRedeemed)
+                    .actionType("REDEEMED")
+                    .description("Redeemed " + pointsRedeemed + " points for checkout discount on task #" + taskId)
+                    .bookingId(taskId)
+                    .createdAt(LocalDateTime.now())
+                    .build());
+        }
+
+        // Save Coupon Usage if coupon applied
+        if (coupon != null && couponDiscount.compareTo(BigDecimal.ZERO) > 0) {
+            couponUsageRepository.save(CouponUsage.builder()
+                    .couponId(coupon.getId())
+                    .userId(userId)
+                    .taskRequestId(taskId)
+                    .discountAmount(couponDiscount)
+                    .createdAt(LocalDateTime.now())
+                    .build());
+        }
+
+        // Update quote status
+        quote.setStatus(QuoteStatus.ACCEPTED);
+        quote.setFinalPriceNpr(bidAmount);
+        quoteRepository.save(quote);
+
+        // Reject other quotes
+        rejectOtherQuotes(taskId, quoteId);
+
+        // Update task request details
+        task.setStatus(TaskRequestStatus.ACCEPTED);
+        task.setAcceptedQuoteId(quoteId);
+        task.setFinalAmountNpr(bidAmount); // Agreed quote bid price (provider earnings based on this)
+        task.setCouponCode(coupon != null ? coupon.getCode() : null);
+        task.setCouponDiscountNpr(couponDiscount);
+        task.setPointsRedeemed(pointsRedeemed);
+        task.setPointsDiscountNpr(pointsDiscount);
+        task.setPaymentMethod(req.getPaymentMethod() != null ? req.getPaymentMethod() : "COD");
+        task.setStartOtp(generateOtp());
+        task.setOtpGeneratedAt(LocalDateTime.now());
+        task.setUpdatedAt(LocalDateTime.now());
+
+        task = taskRequestRepository.save(task);
+        log.info("Task #{} checkout completed by customer {}. Coupon: {}, Coupon Discount: Rs. {}, Points Redeemed: {}, Final Payable: Rs. {}", 
+                taskId, userId, task.getCouponCode(), couponDiscount, pointsRedeemed, payableAmount);
+
+        return TaskResponse.from(task, true);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // CUSTOMER: COUNTER-OFFER A QUOTE
     // ─────────────────────────────────────────────────────────────────────────────
@@ -337,7 +530,7 @@ public class TaskRequestService {
             throw new BadRequestException("Can only counter-offer a PENDING quote.");
         }
 
-        if (req.getCounterPriceNpr().compareTo(BigDecimal.ZERO) <= 0) {
+        if (req.getCounterPriceNpr() == null || req.getCounterPriceNpr().compareTo(BigDecimal.ZERO) <= 0) {
             throw new BadRequestException("Counter-offer price must be greater than zero.");
         }
 
@@ -434,12 +627,20 @@ public class TaskRequestService {
     // ─────────────────────────────────────────────────────────────────────────────
 
     @Transactional
-    public TaskResponse startTask(Long providerId, Long taskId) {
+    public TaskResponse startTask(Long providerId, Long taskId, String otp) {
         TaskRequest task = getTaskOrThrow(taskId);
         assertAcceptedProvider(task, providerId);
 
         if (task.getStatus() != TaskRequestStatus.ACCEPTED) {
             throw new BadRequestException("Job can only be started when status is ACCEPTED.");
+        }
+
+        if (task.getStartOtp() == null) {
+            throw new BadRequestException("OTP has not been generated for this task.");
+        }
+
+        if (!task.getStartOtp().equals(otp.trim())) {
+            throw new BadRequestException("Incorrect OTP. Please ask the customer to show the correct code.");
         }
 
         task.setStatus(TaskRequestStatus.STARTED);
@@ -465,30 +666,48 @@ public class TaskRequestService {
             throw new BadRequestException("Job can only be completed when status is STARTED.");
         }
 
-        BigDecimal finalAmount = task.getFinalAmountNpr();
+        BigDecimal finalAmount = task.getFinalAmountNpr(); // Agreed quote bid price
         if (finalAmount == null) finalAmount = BigDecimal.ZERO;
 
-        // Apply points discount
-        BigDecimal discount = task.getPointsDiscountNpr() != null ? task.getPointsDiscountNpr() : BigDecimal.ZERO;
-        BigDecimal billable = finalAmount.subtract(discount).max(BigDecimal.ZERO);
+        BigDecimal couponDiscount = task.getCouponDiscountNpr() != null ? task.getCouponDiscountNpr() : BigDecimal.ZERO;
+        BigDecimal pointsDiscount = task.getPointsDiscountNpr() != null ? task.getPointsDiscountNpr() : BigDecimal.ZERO;
+        BigDecimal billable = finalAmount.subtract(couponDiscount).subtract(pointsDiscount).max(BigDecimal.ZERO);
 
-        BigDecimal platformFee = billable.multiply(PLATFORM_FEE_RATE).setScale(2, RoundingMode.HALF_UP);
-        BigDecimal providerEarnings = billable.subtract(platformFee);
+        PlatformSettings settings = getPlatformSettings();
+        BigDecimal commissionRate = settings.getCommissionPercentage() != null 
+                ? settings.getCommissionPercentage().divide(new BigDecimal("100"), 4, RoundingMode.HALF_UP)
+                : PLATFORM_FEE_RATE;
+
+        BigDecimal platformFee = finalAmount.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal providerEarnings = finalAmount.subtract(platformFee).setScale(2, RoundingMode.HALF_UP);
 
         task.setStatus(TaskRequestStatus.COMPLETED);
         task.setCompletedAt(LocalDateTime.now());
         task.setPlatformFee(platformFee);
-        task.setFinalAmountNpr(billable);
         task.setUpdatedAt(LocalDateTime.now());
         task = taskRequestRepository.save(task);
 
+        // Record transaction
+        transactionRepository.save(Transaction.builder()
+                .bookingId(taskId)
+                .customerId(task.getUser().getId())
+                .providerId(providerId)
+                .amount(billable)
+                .commission(platformFee)
+                .providerEarnings(providerEarnings)
+                .status("RELEASED")
+                .transactionId("TX-" + System.currentTimeMillis() + "-" + taskId)
+                .createdAt(LocalDateTime.now())
+                .build());
+
         // Award reward points to customer (0.10 points per NPR spent)
-        PlatformSettings settings = getPlatformSettings();
-        int pointsEarned = billable.multiply(settings.getPointsPerNprSpent())
+        BigDecimal pointsPerNpr = settings.getPointsPerNprSpent() != null ? settings.getPointsPerNprSpent() : new BigDecimal("0.10");
+        int pointsEarned = billable.multiply(pointsPerNpr)
                 .setScale(0, RoundingMode.DOWN).intValue();
         if (pointsEarned > 0) {
             User customer = task.getUser();
-            customer.setRewardPoints(customer.getRewardPoints() + pointsEarned);
+            int currentPoints = customer.getRewardPoints() != null ? customer.getRewardPoints() : 0;
+            customer.setRewardPoints(currentPoints + pointsEarned);
             rewardPointsHistoryRepository.save(RewardPointsHistory.builder()
                     .userId(customer.getId())
                     .points(pointsEarned)
@@ -502,21 +721,23 @@ public class TaskRequestService {
         // Update provider stats
         Provider provider = providerRepository.findById(providerId)
                 .orElseThrow(() -> ResourceNotFoundException.of("Provider", providerId));
-        provider.setTotalJobs(provider.getTotalJobs() + 1);
+        int currentTotalJobs = provider.getTotalJobs() != null ? provider.getTotalJobs() : 0;
+        int newTotalJobs = currentTotalJobs + 1;
+        provider.setTotalJobs(newTotalJobs);
         providerRepository.save(provider);
 
         // Milestone incentive: Rs. 500 bonus every 5 completed jobs
-        if (provider.getTotalJobs() % 5 == 0) {
+        if (newTotalJobs > 0 && newTotalJobs % 5 == 0) {
             providerIncentiveRepository.save(ProviderIncentive.builder()
                     .providerId(providerId)
                     .amount(new BigDecimal("500.00"))
                     .bookingId(taskId)
                     .reason("COMPLETED_BOOKINGS_MILESTONE")
-                    .description("Milestone bonus: " + provider.getTotalJobs() + " completed jobs")
+                    .description("Milestone bonus: " + newTotalJobs + " completed jobs")
                     .status("PENDING_PAYOUT")
                     .createdAt(LocalDateTime.now())
                     .build());
-            log.info("Milestone incentive awarded to provider {} (total jobs: {})", providerId, provider.getTotalJobs());
+            log.info("Milestone incentive awarded to provider {} (total jobs: {})", providerId, newTotalJobs);
         }
 
         log.info("Task {} completed. Provider {} earned NPR {}. Customer earned {} points.",
@@ -652,6 +873,7 @@ public class TaskRequestService {
         quoteRepository.saveAll(others);
     }
 
+    @Transactional(readOnly = true)
     public List<TaskResponse> getTasksForProvider(Long providerId) {
         List<TaskRequest> tasks = taskRequestRepository.findAssignedTasksForProvider(providerId);
         return tasks.stream()

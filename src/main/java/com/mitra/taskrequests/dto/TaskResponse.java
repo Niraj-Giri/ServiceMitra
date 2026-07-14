@@ -36,6 +36,7 @@ public class TaskResponse {
     private Double latitude;
     private Double longitude;
     private LocalDate preferredDate;
+    private List<String> preferredSlots;
 
     // Customer info
     private CustomerInfo customer;
@@ -49,6 +50,9 @@ public class TaskResponse {
     private BigDecimal platformFee;
     private Integer pointsRedeemed;
     private BigDecimal pointsDiscountNpr;
+    private String couponCode;
+    private BigDecimal couponDiscountNpr;
+    private String paymentMethod;
 
     // OTP (only for customer when status = ACCEPTED)
     private String startOtp;
@@ -101,6 +105,9 @@ public class TaskResponse {
                 .latitude(tr.getLatitude())
                 .longitude(tr.getLongitude())
                 .preferredDate(tr.getPreferredDate())
+                .preferredSlots(tr.getPreferredSlots() == null || tr.getPreferredSlots().isEmpty()
+                        ? List.of()
+                        : java.util.Arrays.asList(tr.getPreferredSlots().split(",")))
                 .customer(customerInfo)
                 .quotes(quoteResponses)
                 .acceptedQuoteId(tr.getAcceptedQuoteId())
@@ -108,6 +115,9 @@ public class TaskResponse {
                 .platformFee(tr.getPlatformFee())
                 .pointsRedeemed(tr.getPointsRedeemed())
                 .pointsDiscountNpr(tr.getPointsDiscountNpr())
+                .couponCode(tr.getCouponCode())
+                .couponDiscountNpr(tr.getCouponDiscountNpr())
+                .paymentMethod(tr.getPaymentMethod())
                 .startOtp(otpVisible ? tr.getStartOtp() : null)
                 .startedAt(tr.getStartedAt())
                 .completedAt(tr.getCompletedAt())

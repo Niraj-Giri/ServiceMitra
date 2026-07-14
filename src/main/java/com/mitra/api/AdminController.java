@@ -30,7 +30,7 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/v1/admin")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 @Transactional(readOnly = true)
 public class AdminController {
 
@@ -47,18 +47,53 @@ public class AdminController {
     private final BookingStatusHistoryRepository bookingStatusHistoryRepository;
     private final RewardPointsHistoryRepository rewardPointsHistoryRepository;
     private final ProviderIncentiveRepository providerIncentiveRepository;
+    private final com.mitra.reviews.ReviewRepository reviewRepository;
 
     // Helper for audit logs
+    private String getClientIp() {
+        try {
+            jakarta.servlet.http.HttpServletRequest request =
+                ((org.springframework.web.context.request.ServletRequestAttributes)
+                    org.springframework.web.context.request.RequestContextHolder.currentRequestAttributes()).getRequest();
+            String ip = request.getHeader("X-Forwarded-For");
+            if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
+                ip = request.getRemoteAddr();
+            }
+            return ip;
+        } catch (Exception e) {
+            return "127.0.0.1";
+        }
+    }
+
+    /**
+     * SEC-04: Extract the real admin identity from the Spring Security context.
+     * Previously this returned the hardcoded string "Admin User", meaning audit
+     * logs were useless - you could never tell WHICH admin performed an action.
+     */
+    private String getAdminIdentity() {
+        try {
+            Object principal = org.springframework.security.core.context.SecurityContextHolder
+                    .getContext().getAuthentication().getPrincipal();
+            // Principal is set to the user ID (Long) by JwtAuthFilter
+            if (principal instanceof Long) {
+                return "Admin#" + principal;
+            }
+            return principal != null ? principal.toString() : "Unknown";
+        } catch (Exception e) {
+            return "Unknown";
+        }
+    }
+
     private void logAdminAction(String action, String entity, String oldValue, String newValue) {
         try {
             AuditLog audit = AuditLog.builder()
-                    .admin("Admin User")
+                    .admin(getAdminIdentity())   // SEC-04: real identity, not hardcoded "Admin User"
                     .action(action)
                     .entity(entity)
                     .oldValue(oldValue)
                     .newValue(newValue)
                     .timestamp(LocalDateTime.now())
-                    .ipAddress("127.0.0.1")
+                    .ipAddress(getClientIp())
                     .build();
             auditLogRepository.save(audit);
         } catch (Exception e) {
@@ -82,9 +117,9 @@ public class AdminController {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // ANALYTICS & DASHBOARD
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/analytics/summary")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getSummary() {
@@ -154,13 +189,22 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(charts));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // CUSTOMER MANAGEMENT
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/customers")
-    public ResponseEntity<ApiResponse<List<User>>> getCustomers() {
-        return ResponseEntity.ok(ApiResponse.success(userRepository.findAll()));
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<User>>> getCustomers(
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "DESC") String sortDir) {
+        org.springframework.data.domain.Sort sort = sortDir.equalsIgnoreCase("ASC") 
+                ? org.springframework.data.domain.Sort.by(sortBy).ascending() 
+                : org.springframework.data.domain.Sort.by(sortBy).descending();
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, sort);
+        return ResponseEntity.ok(ApiResponse.success(userRepository.findCustomers(search, pageable)));
     }
 
     @PutMapping("/customers/{id}/suspend")
@@ -206,9 +250,10 @@ public class AdminController {
     public ResponseEntity<ApiResponse<Void>> deleteCustomer(@PathVariable Long id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Customer", id));
-        userRepository.delete(user);
-        logAdminAction("Deleted customer account: " + user.getName(), "User", user.getName(), "DELETED");
-        return ResponseEntity.ok(ApiResponse.success(null, "Customer account deleted"));
+        user.setIsDeleted(true);
+        userRepository.save(user);
+        logAdminAction("Soft deleted customer account: " + user.getName(), "User", user.getName(), "DELETED");
+        return ResponseEntity.ok(ApiResponse.success(null, "Customer account deleted successfully"));
     }
 
     @GetMapping("/customers/{id}/bookings")
@@ -229,6 +274,30 @@ public class AdminController {
         data.put("pointsBalance", user.getRewardPoints() != null ? user.getRewardPoints() : 0);
         data.put("history", history);
         return ResponseEntity.ok(ApiResponse.success(data));
+    }
+
+    @GetMapping("/customers/{id}/reviews")
+    public ResponseEntity<ApiResponse<List<com.mitra.reviews.Review>>> getCustomerReviews(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(reviewRepository.findByCustomerId(id)));
+    }
+
+    @GetMapping("/customers/{id}/complaints")
+    public ResponseEntity<ApiResponse<List<Complaint>>> getCustomerComplaints(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(complaintRepository.findByCustomerIdOrderByCreatedAtDesc(id)));
+    }
+
+    @GetMapping("/providers/{id}/bookings")
+    public ResponseEntity<ApiResponse<List<BookingResponse>>> getProviderBookings(@PathVariable Long id) {
+        List<BookingResponse> responses = bookingRepository.findByProvider_IdOrderByCreatedAtDesc(id)
+                .stream()
+                .map(b -> BookingResponse.from(b, true, true))
+                .toList();
+        return ResponseEntity.ok(ApiResponse.success(responses));
+    }
+
+    @GetMapping("/providers/{id}/complaints")
+    public ResponseEntity<ApiResponse<List<Complaint>>> getProviderComplaints(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(complaintRepository.findByProviderIdOrderByCreatedAtDesc(id)));
     }
 
     @PostMapping("/customers/{id}/loyalty")
@@ -260,17 +329,23 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Customer points adjusted successfully"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // PROVIDER MANAGEMENT
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/providers")
-    public ResponseEntity<ApiResponse<List<Provider>>> getProviders(
-            @RequestParam(required = false) String status) {
-        List<Provider> providers = status != null
-                ? providerRepository.findByStatusOrderByCreatedAtDesc(status)
-                : providerRepository.findAll();
-        return ResponseEntity.ok(ApiResponse.success(providers));
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<Provider>>> getProviders(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "DESC") String sortDir) {
+        org.springframework.data.domain.Sort sort = sortDir.equalsIgnoreCase("ASC") 
+                ? org.springframework.data.domain.Sort.by(sortBy).ascending() 
+                : org.springframework.data.domain.Sort.by(sortBy).descending();
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, sort);
+        return ResponseEntity.ok(ApiResponse.success(providerRepository.findProviders(status, search, pageable)));
     }
 
     @GetMapping("/providers/pending")
@@ -400,20 +475,29 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Incentive bonus awarded successfully"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // BOOKING MANAGEMENT
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/bookings")
     public ResponseEntity<ApiResponse<Page<BookingResponse>>> getBookings(
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String search,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-        Page<Booking> bookings = status != null
-                ? bookingRepository.findByStatusOrderByCreatedAtDesc(
-                        BookingStatus.valueOf(status), PageRequest.of(page, size))
-                : bookingRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(page, size));
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "id") String sortBy,
+            @RequestParam(defaultValue = "DESC") String sortDir) {
+        org.springframework.data.domain.Sort sort = sortDir.equalsIgnoreCase("ASC") 
+                ? org.springframework.data.domain.Sort.by(sortBy).ascending() 
+                : org.springframework.data.domain.Sort.by(sortBy).descending();
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, sort);
         
+        BookingStatus statusEnum = null;
+        if (status != null && !status.isEmpty() && !status.equalsIgnoreCase("ALL")) {
+            statusEnum = BookingStatus.valueOf(status.toUpperCase());
+        }
+        
+        Page<Booking> bookings = bookingRepository.findBookings(statusEnum, search, pageable);
         Page<BookingResponse> responses = bookings.map(b -> BookingResponse.from(b, true, true));
         return ResponseEntity.ok(ApiResponse.success(responses));
     }
@@ -496,9 +580,9 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(bookingStatusHistoryRepository.findByBookingIdOrderByUpdatedAtAsc(id)));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // SERVICE MANAGEMENT
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/services")
     public ResponseEntity<ApiResponse<List<ServiceListing>>> getServices() {
@@ -554,9 +638,9 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Service deactivated"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // PAYMENTS & PAYOUTS
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/payments/transactions")
     public ResponseEntity<ApiResponse<List<Transaction>>> getTransactions() {
@@ -599,9 +683,9 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Payout placed on hold"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // COMPLAINTS
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/complaints")
     public ResponseEntity<ApiResponse<List<Complaint>>> getComplaints() {
@@ -639,9 +723,72 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Complaint resolved successfully"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    @PutMapping("/complaints/{id}/assign")
+    @Transactional
+    public ResponseEntity<ApiResponse<Complaint>> assignComplaint(
+            @PathVariable Long id,
+            @RequestBody Map<String, Object> body) {
+        Complaint complaint = complaintRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
+        Long adminId = body.get("adminId") != null ? Long.valueOf(body.get("adminId").toString()) : null;
+        complaint.setAssignedAdminId(adminId);
+        complaintRepository.save(complaint);
+        logAdminAction("Assigned complaint #" + id + " to admin " + adminId, "Complaint", "", String.valueOf(adminId));
+        return ResponseEntity.ok(ApiResponse.success(complaint));
+    }
+
+    @PutMapping("/complaints/{id}/notes")
+    @Transactional
+    public ResponseEntity<ApiResponse<Complaint>> updateComplaintNotes(
+            @PathVariable Long id,
+            @RequestBody Map<String, String> body) {
+        Complaint complaint = complaintRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
+        String notes = body.get("notes");
+        complaint.setInternalNotes(notes);
+        complaintRepository.save(complaint);
+        logAdminAction("Updated internal notes for complaint #" + id, "Complaint", "", notes);
+        return ResponseEntity.ok(ApiResponse.success(complaint));
+    }
+
+    // -----------------------------------------------------------------------------
+    // REVIEWS MODERATION
+    // -----------------------------------------------------------------------------
+
+    @GetMapping("/reviews")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.reviews.Review>>> getReviews(
+            @RequestParam(required = false) String search,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size);
+        return ResponseEntity.ok(ApiResponse.success(reviewRepository.findReviews(search, pageable)));
+    }
+
+    @PutMapping("/reviews/{id}/hide")
+    @Transactional
+    public ResponseEntity<ApiResponse<com.mitra.reviews.Review>> toggleHideReview(@PathVariable Long id) {
+        com.mitra.reviews.Review review = reviewRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Review", id));
+        boolean oldVal = review.getIsHidden();
+        review.setIsHidden(!oldVal);
+        reviewRepository.save(review);
+        logAdminAction("Toggled review visibility for review #" + id, "Review", String.valueOf(oldVal), String.valueOf(!oldVal));
+        return ResponseEntity.ok(ApiResponse.success(review));
+    }
+
+    @DeleteMapping("/reviews/{id}")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> deleteReview(@PathVariable Long id) {
+        com.mitra.reviews.Review review = reviewRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Review", id));
+        reviewRepository.delete(review);
+        logAdminAction("Permanently deleted spam review #" + id, "Review", review.getComment(), "DELETED");
+        return ResponseEntity.ok(ApiResponse.success(null, "Review deleted successfully"));
+    }
+
+    // -----------------------------------------------------------------------------
     // BROADCAST NOTIFICATIONS
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @PostMapping("/notifications/broadcast")
     public ResponseEntity<ApiResponse<Void>> sendBroadcast(@RequestBody Map<String, String> payload) {
@@ -654,9 +801,9 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Notification broadcast sent successfully"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // PLATFORM SETTINGS
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/settings")
     public ResponseEntity<ApiResponse<PlatformSettings>> getSettings() {
@@ -695,23 +842,37 @@ public class AdminController {
         if (payload.containsKey("workingHours")) settings.setWorkingHours((String) payload.get("workingHours"));
         if (payload.containsKey("paymentGateway")) settings.setPaymentGateway((String) payload.get("paymentGateway"));
 
+        // Loyalty config fields
+        if (payload.containsKey("pointsPerNprSpent")) {
+            settings.setPointsPerNprSpent(new BigDecimal(payload.get("pointsPerNprSpent").toString()));
+        }
+        if (payload.containsKey("pointsRedemptionRate")) {
+            settings.setPointsRedemptionRate(new BigDecimal(payload.get("pointsRedemptionRate").toString()));
+        }
+        if (payload.containsKey("firstBookingPointsBonus")) {
+            settings.setFirstBookingPointsBonus(Integer.valueOf(payload.get("firstBookingPointsBonus").toString()));
+        }
+        if (payload.containsKey("referralPointsBonus")) {
+            settings.setReferralPointsBonus(Integer.valueOf(payload.get("referralPointsBonus").toString()));
+        }
+
         platformSettingsRepository.save(settings);
         logAdminAction("Updated global platform configurations", "PlatformSettings", "", "UPDATED");
         return ResponseEntity.ok(ApiResponse.success(settings));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // AUDIT LOGS
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @GetMapping("/audit-logs")
     public ResponseEntity<ApiResponse<List<AuditLog>>> getAuditLogs() {
         return ResponseEntity.ok(ApiResponse.success(auditLogRepository.findAllByOrderByTimestampDesc()));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
     // INNER REQUEST CLASSES
-    // ─────────────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------------
 
     @Data
     public static class CreateServiceRequest {

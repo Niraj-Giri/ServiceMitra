@@ -21,7 +21,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/chat/tasks/{taskId}/messages")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class TaskChatController {
 
     private final ChatMessageRepository chatMessageRepository;
@@ -39,7 +39,11 @@ public class TaskChatController {
 
         Long userId = authService.extractUserIdFromToken(httpRequest);
         String role = authService.extractRoleFromToken(httpRequest);
-        getAndVerifyAccess(taskId, userId, role);
+        TaskRequest task = getAndVerifyAccess(taskId, userId, role);
+
+        if (!task.getStatus().isChatAllowed()) {
+            throw new BadRequestException("Chat is only available once a bid has been accepted and before the job is completed.");
+        }
 
         List<ChatMessage> messages = chatMessageRepository.findByTaskRequestIdOrderByCreatedAtAsc(taskId);
         return ResponseEntity.ok(ApiResponse.success(messages));
@@ -59,8 +63,8 @@ public class TaskChatController {
         String role = authService.extractRoleFromToken(httpRequest);
         TaskRequest task = getAndVerifyAccess(taskId, userId, role);
 
-        if (task.getStatus().isTerminal()) {
-            throw new BadRequestException("Chat is disabled for completed, cancelled or expired tasks.");
+        if (!task.getStatus().isChatAllowed()) {
+            throw new BadRequestException("Chat is only available once a bid or counter-offer has been accepted.");
         }
 
         ChatMessage message = ChatMessage.builder()

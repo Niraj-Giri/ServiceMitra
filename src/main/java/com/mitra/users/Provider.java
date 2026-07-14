@@ -16,7 +16,14 @@ import java.time.LocalDateTime;
  *   SUSPENDED      → APPROVED (reactivated by admin)
  */
 @Entity
-@Table(name = "providers")
+@Table(
+    name = "providers",
+    indexes = {
+        @Index(name = "idx_providers_status", columnList = "status"),
+        @Index(name = "idx_providers_category", columnList = "service_category"),
+        @Index(name = "idx_providers_online", columnList = "is_online")
+    }
+)
 @Getter
 @Setter
 @NoArgsConstructor

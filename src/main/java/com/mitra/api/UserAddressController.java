@@ -14,6 +14,8 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -21,7 +23,9 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/v1/users/addresses")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
+@PreAuthorize("hasRole('CUSTOMER')")
+@Transactional(readOnly = true)
+// SEC-05: @CrossOrigin removed - CORS is centrally managed in SecurityConfig
 public class UserAddressController {
 
     private final UserRepository userRepository;
@@ -76,6 +80,7 @@ public class UserAddressController {
      * Adds a new address to the user's account.
      */
     @PostMapping
+    @Transactional
     public ResponseEntity<ApiResponse<AddressDto>> addAddress(
             HttpServletRequest request,
             @RequestBody CreateAddressRequest body) {
@@ -123,6 +128,7 @@ public class UserAddressController {
      * Deletes a saved address.
      */
     @DeleteMapping("/{id}")
+    @Transactional
     public ResponseEntity<ApiResponse<String>> deleteAddress(
             HttpServletRequest request,
             @PathVariable Long id) {

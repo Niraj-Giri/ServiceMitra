@@ -148,9 +148,13 @@ public class AuthService {
             }
             default -> {
                 // CUSTOMER
-                yield userRepository.findByPhone(phone)
+                User customer = userRepository.findByPhone(phone)
                         .orElseThrow(() -> new BadRequestException(
                                 "No account found for this number. Please register first."));
+                if (Boolean.TRUE.equals(customer.getIsDeleted())) {
+                    throw new ForbiddenException("Your account has been deleted. Please contact support.");
+                }
+                yield customer;
             }
         };
     }
@@ -350,13 +354,32 @@ public class AuthService {
         if (record.getExpiresAt().isBefore(LocalDateTime.now())) {
             throw new BadRequestException("OTP expired. Please request a new OTP.");
         }
-        // OTP match check (TEMPORARY: accept any input OTP for testing/development convenience)
+
+        // SEC-08: Enforce the OTP attempt limit.
+        // MAX_OTP_ATTEMPTS (3) was defined as a constant but never enforced.
+        // Without this, an attacker could brute-force all 9000 possible 4-digit OTPs.
+        // NOTE: The attemptCount is incremented on EVERY verification attempt, including
+        // valid ones (the check runs before we know if the OTP is correct in dev mode).
+        // In production the OTP match check would naturally limit this further.
+        int currentAttempts = record.getAttemptCount() != null ? record.getAttemptCount() : 0;
+        if (currentAttempts >= MAX_OTP_ATTEMPTS) {
+            throw new BadRequestException(
+                    "Too many incorrect attempts. Please request a new OTP.");
+        }
+        record.setAttemptCount(currentAttempts + 1);
+
+        // OTP match check
+        // DEV MODE: Any OTP is accepted for development/testing convenience.
+        // TODO Production: Remove this comment block and enable the check below.
+        //   SMS gateway integration needed before enabling strict OTP validation.
         /*
         if (!record.getOtp().equals(otp)) {
+            otpRepository.save(record); // persist incremented attempt count
             throw new BadRequestException("Incorrect OTP.");
         }
         */
-        // Mark as used
+
+        // Mark as used so it cannot be replayed
         record.setIsUsed(true);
         record.setUsedAt(LocalDateTime.now());
         otpRepository.save(record);

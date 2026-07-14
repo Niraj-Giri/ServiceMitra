@@ -6,4 +6,15 @@ import java.util.List;
 public interface ReviewRepository extends JpaRepository<Review, Long> {
     List<Review> findByProviderId(Long providerId);
     List<Review> findByCustomerId(Long customerId);
+
+    @org.springframework.data.jpa.repository.Query("""
+        SELECT r FROM Review r
+        WHERE (:search IS NULL OR :search = '' OR LOWER(r.comment) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR LOWER(r.customer.name) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR LOWER(r.provider.businessName) LIKE LOWER(CONCAT('%', :search, '%')))
+    """)
+    org.springframework.data.domain.Page<Review> findReviews(
+        @org.springframework.data.repository.query.Param("search") String search,
+        org.springframework.data.domain.Pageable pageable
+    );
 }

@@ -1,9 +1,9 @@
 package com.mitra.api;
 
 import com.mitra.auth.AuthService;
-import com.mitra.bookings.Booking;
-import com.mitra.bookings.BookingRepository;
 import com.mitra.common.*;
+import com.mitra.taskrequests.TaskRequest;
+import com.mitra.taskrequests.TaskRequestRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -18,12 +18,11 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/v1/complaints")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class ComplaintController {
 
     private final ComplaintRepository complaintRepository;
     private final ComplaintMessageRepository complaintMessageRepository;
-    private final BookingRepository bookingRepository;
+    private final TaskRequestRepository taskRequestRepository;
     private final AuthService authService;
 
     @PostMapping
@@ -39,18 +38,40 @@ public class ComplaintController {
             throw new ForbiddenException("Only customers can submit complaints.");
         }
 
-        Long bookingId = Long.valueOf(payload.get("bookingId").toString());
-        Booking booking = bookingRepository.findById(bookingId)
+        if (payload == null || !payload.containsKey("bookingId") || payload.get("bookingId") == null) {
+            throw new BadRequestException("Booking ID is required.");
+        }
+        if (!payload.containsKey("subject") || payload.get("subject") == null || payload.get("subject").toString().isBlank()) {
+            throw new BadRequestException("Subject is required.");
+        }
+        if (!payload.containsKey("description") || payload.get("description") == null || payload.get("description").toString().isBlank()) {
+            throw new BadRequestException("Description is required.");
+        }
+
+        Long bookingId;
+        try {
+            bookingId = Long.valueOf(payload.get("bookingId").toString());
+        } catch (NumberFormatException e) {
+            throw new BadRequestException("Invalid Booking ID format.");
+        }
+
+        TaskRequest task = taskRequestRepository.findById(bookingId)
                 .orElseThrow(() -> ResourceNotFoundException.of("Booking", bookingId));
 
-        if (!booking.getUser().getId().equals(userId)) {
+        if (!task.getUser().getId().equals(userId)) {
             throw new ForbiddenException("You can only submit complaints for your own bookings.");
         }
+
+        Long providerId = task.getQuotes().stream()
+                .filter(q -> q.getId().equals(task.getAcceptedQuoteId()))
+                .map(q -> q.getProvider().getId())
+                .findFirst()
+                .orElse(0L);
 
         Complaint complaint = Complaint.builder()
                 .bookingId(bookingId)
                 .customerId(userId)
-                .providerId(booking.getProvider() != null ? booking.getProvider().getId() : 0L)
+                .providerId(providerId)
                 .subject((String) payload.get("subject"))
                 .description((String) payload.get("description"))
                 .status("PENDING")
@@ -119,11 +140,15 @@ public class ComplaintController {
             throw new ForbiddenException("Unauthorized to send message.");
         }
 
+        if (payload == null || !payload.containsKey("content") || payload.get("content") == null || payload.get("content").trim().isEmpty()) {
+            throw new BadRequestException("Message content cannot be empty.");
+        }
+
         ComplaintMessage message = ComplaintMessage.builder()
                 .complaintId(id)
                 .senderId(userId)
                 .senderRole(role.toUpperCase())
-                .content(payload.get("content"))
+                .content(payload.get("content").trim())
                 .createdAt(LocalDateTime.now())
                 .build();
 
