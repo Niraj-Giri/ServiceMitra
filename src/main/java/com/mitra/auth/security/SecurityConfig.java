@@ -40,7 +40,7 @@ public class SecurityConfig {
      *  Dev default: http://localhost:5173 (Vite dev server).
      *  Production: set CORS_ALLOWED_ORIGINS to your actual domain.
      */
-    @Value("${cors.allowed-origins:http://localhost:5173,http://localhost:3000,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:5174}")
+    @Value("${cors.allowed-origins:http://localhost:5173,http://localhost:3000,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:3000,http://127.0.0.1:5174,https://service-mitra-frontend.vercel.app}")
     private String allowedOriginsRaw;
 
     public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
