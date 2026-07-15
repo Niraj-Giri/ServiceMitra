@@ -130,33 +130,7 @@ public class RatingService {
     public Rating updateRating(Long customerId, Long bookingId,
                                int punctuality, int quality, int behavior,
                                String comment) {
-        validateScore(punctuality, "Punctuality");
-        validateScore(quality, "Quality");
-        validateScore(behavior, "Behavior");
-
-        Rating rating = ratingRepository.findByBookingId(bookingId)
-                .orElseThrow(() -> new ResourceNotFoundException("Rating not found for booking ID: " + bookingId));
-
-        if (!rating.getCustomerId().equals(customerId)) {
-            throw ForbiddenException.notYourResource("rating");
-        }
-
-        BigDecimal overall = Rating.calculateOverall(punctuality, quality, behavior);
-
-        rating.setPunctualityScore(punctuality);
-        rating.setQualityScore(quality);
-        rating.setBehaviorScore(behavior);
-        rating.setOverallScore(overall);
-        rating.setComment(comment);
-
-        rating = ratingRepository.save(rating);
-
-        updateProviderRatingCache(rating.getProviderId());
-
-        log.info("Rating updated for booking {} → provider {}. Overall: {}",
-                bookingId, rating.getProviderId(), overall);
-
-        return rating;
+        throw new BadRequestException("Reviews cannot be modified once they are submitted!");
     }
 
     /**

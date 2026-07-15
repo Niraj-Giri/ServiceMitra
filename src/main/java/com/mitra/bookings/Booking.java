@@ -162,6 +162,14 @@ public class Booking {
     @Column(name = "rejected_provider_ids", length = 500)
     private String rejectedProviderIds;
 
+    @Column(name = "is_paused", nullable = false)
+    @Builder.Default
+    private Boolean isPaused = false;
+
+    @Column(name = "is_escalated", nullable = false)
+    @Builder.Default
+    private Boolean isEscalated = false;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;
 

@@ -20,4 +20,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
         @org.springframework.data.repository.query.Param("search") String search,
         org.springframework.data.domain.Pageable pageable
     );
+    long countByBookingsLimited(Boolean bookingsLimited);
 }

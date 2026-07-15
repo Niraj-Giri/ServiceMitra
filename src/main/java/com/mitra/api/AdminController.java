@@ -8,6 +8,7 @@ import com.mitra.config.PlatformSettingsRepository;
 import com.mitra.services.ServiceListing;
 import com.mitra.services.ServiceListingRepository;
 import com.mitra.users.*;
+import com.mitra.reviews.Review;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
@@ -37,6 +38,7 @@ public class AdminController {
     private final ProviderRepository providerRepository;
     private final UserRepository userRepository;
     private final BookingRepository bookingRepository;
+    private final com.mitra.taskrequests.TaskRequestRepository taskRequestRepository;
     private final ServiceListingRepository serviceListingRepository;
     private final PlatformSettingsRepository platformSettingsRepository;
     private final AuditLogRepository auditLogRepository;
@@ -48,6 +50,10 @@ public class AdminController {
     private final RewardPointsHistoryRepository rewardPointsHistoryRepository;
     private final ProviderIncentiveRepository providerIncentiveRepository;
     private final com.mitra.reviews.ReviewRepository reviewRepository;
+    private final ProviderStrikeRepository providerStrikeRepository;
+    private final ProviderWalletRepository providerWalletRepository;
+    private final WalletTransactionRepository walletTransactionRepository;
+    private final BroadcastNotificationRepository broadcastNotificationRepository;
 
     // Helper for audit logs
     private String getClientIp() {
@@ -85,6 +91,10 @@ public class AdminController {
     }
 
     private void logAdminAction(String action, String entity, String oldValue, String newValue) {
+        logAdminAction(action, entity, oldValue, newValue, null);
+    }
+
+    private void logAdminAction(String action, String entity, String oldValue, String newValue, String reason) {
         try {
             AuditLog audit = AuditLog.builder()
                     .admin(getAdminIdentity())   // SEC-04: real identity, not hardcoded "Admin User"
@@ -94,6 +104,7 @@ public class AdminController {
                     .newValue(newValue)
                     .timestamp(LocalDateTime.now())
                     .ipAddress(getClientIp())
+                    .reason(reason)
                     .build();
             auditLogRepository.save(audit);
         } catch (Exception e) {
@@ -127,27 +138,94 @@ public class AdminController {
         long totalProviders = providerRepository.count();
         long onlineProviders = providerRepository.countByIsOnline(true);
         long pendingReviews = providerRepository.countByStatus("PENDING_REVIEW");
-        long totalBookings = bookingRepository.count();
-        long completedBookings = bookingRepository.countByStatus(BookingStatus.COMPLETED);
-        long activeBookings = totalBookings - completedBookings - bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_CUSTOMER) 
-                - bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_PROVIDER) - bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_ADMIN);
-        
+
+        // Bidding/Task requests counts
+        long totalTasks = taskRequestRepository.count();
+        long completedTasks = taskRequestRepository.countByStatus(com.mitra.taskrequests.TaskRequestStatus.COMPLETED);
+        long activeTasks = taskRequestRepository.countByStatus(com.mitra.taskrequests.TaskRequestStatus.ACCEPTED)
+                + taskRequestRepository.countByStatus(com.mitra.taskrequests.TaskRequestStatus.STARTED)
+                + taskRequestRepository.countByStatus(com.mitra.taskrequests.TaskRequestStatus.OPEN)
+                + taskRequestRepository.countByStatus(com.mitra.taskrequests.TaskRequestStatus.QUOTING);
+        long cancelledTasks = taskRequestRepository.countByStatus(com.mitra.taskrequests.TaskRequestStatus.CANCELLED);
+
+        // Direct bookings counts
+        long totalDirectBookings = bookingRepository.count();
+        long completedDirectBookings = bookingRepository.countByStatus(BookingStatus.COMPLETED);
+        long activeDirectBookings = totalDirectBookings - completedDirectBookings 
+                - bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_CUSTOMER) 
+                - bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_PROVIDER) 
+                - bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_ADMIN);
+        long cancelledDirectBookings = bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_CUSTOMER)
+                + bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_PROVIDER)
+                + bookingRepository.countByStatus(BookingStatus.CANCELLED_BY_ADMIN);
+
+        // Combined values
+        long totalBookings = totalDirectBookings + totalTasks;
+        long completedBookings = completedDirectBookings + completedTasks;
+        long activeBookings = activeDirectBookings + activeTasks;
+        long cancelledBookings = cancelledDirectBookings + cancelledTasks;
+
         // Sum total revenue from platform commission
         BigDecimal totalCommission = transactionRepository.sumTotalCommission();
 
         long pendingComplaints = complaintRepository.countByStatus("PENDING");
 
-        Map<String, Object> summary = Map.of(
-                "totalCustomers", totalCustomers,
-                "totalProviders", totalProviders,
-                "onlineProviders", onlineProviders,
-                "pendingProviderReviews", pendingReviews,
-                "totalBookings", totalBookings,
-                "completedBookings", completedBookings,
-                "activeBookings", activeBookings,
-                "totalRevenue", totalCommission,
-                "pendingComplaints", pendingComplaints
-        );
+        LocalDateTime startOfToday = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0);
+        long todayBookings = bookingRepository.countBookingsCreatedAfter(startOfToday)
+                + taskRequestRepository.countTasksCreatedAfter(startOfToday);
+        BigDecimal todayRevenue = transactionRepository.sumCommissionSince(startOfToday);
+
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("totalCustomers", totalCustomers);
+        summary.put("totalProviders", totalProviders);
+        summary.put("onlineProviders", onlineProviders);
+        summary.put("pendingProviderReviews", pendingReviews);
+        summary.put("totalBookings", totalBookings);
+        summary.put("completedBookings", completedBookings);
+        summary.put("activeBookings", activeBookings);
+        summary.put("totalRevenue", totalCommission);
+        summary.put("pendingComplaints", pendingComplaints);
+        summary.put("todayBookings", todayBookings);
+        summary.put("cancelledBookings", cancelledBookings);
+        summary.put("todayRevenue", todayRevenue);
+
+        // Actionable operational queues
+        long pendingRefundRequests = complaintRepository.countByCategoryAndStatus("REFUND_ISSUE", "PENDING")
+                + transactionRepository.countByStatus("PENDING_REFUND");
+        long pendingPayoutRequests = payoutRequestRepository.countByStatus("PENDING");
+        long bookingsWithoutProvider = bookingRepository.countByProviderIsNullAndStatus(BookingStatus.PENDING_DISPATCH);
+        long emergencyBookings = bookingRepository.countByStatusInAndScheduledAtBefore(
+                java.util.List.of(BookingStatus.PENDING_DISPATCH, BookingStatus.ASSIGNED),
+                LocalDateTime.now().plusHours(2));
+        long highPriorityComplaints = complaintRepository.countByPriorityAndStatus("HIGH", "PENDING");
+        long suspendedProvidersAwaitingReview = providerRepository.countByStatus("SUSPENDED");
+        long providersWithHighComplaintRate = complaintRepository.findAll().stream()
+                .filter(c -> c.getProviderId() != null)
+                .collect(java.util.stream.Collectors.groupingBy(com.mitra.common.Complaint::getProviderId, java.util.stream.Collectors.counting()))
+                .entrySet().stream()
+                .filter(e -> e.getValue() >= 3)
+                .count();
+        long customersWithFraudRisk = userRepository.countByBookingsLimited(true);
+        long failedPayments = transactionRepository.countByStatus("FAILED");
+        long expiredKYC = 0; // standard fallback
+        long servicesAwaitingApproval = serviceListingRepository.countByIsActiveFalse();
+        long lowSupplyAreas = java.util.Arrays.asList("ELECTRICAL", "PLUMBING", "CLEANING", "AC", "PAINTING").stream()
+                .filter(cat -> providerRepository.findEligibleProviders(cat).isEmpty())
+                .count();
+
+        summary.put("pendingRefundRequests", pendingRefundRequests);
+        summary.put("pendingPayoutRequests", pendingPayoutRequests);
+        summary.put("bookingsWithoutProvider", bookingsWithoutProvider);
+        summary.put("emergencyBookings", emergencyBookings);
+        summary.put("highPriorityComplaints", highPriorityComplaints);
+        summary.put("suspendedProvidersAwaitingReview", suspendedProvidersAwaitingReview);
+        summary.put("providersWithHighComplaintRate", providersWithHighComplaintRate);
+        summary.put("customersWithFraudRisk", customersWithFraudRisk);
+        summary.put("failedPayments", failedPayments);
+        summary.put("expiredKYC", expiredKYC);
+        summary.put("servicesAwaitingApproval", servicesAwaitingApproval);
+        summary.put("lowSupplyAreas", lowSupplyAreas);
+
         return ResponseEntity.ok(ApiResponse.success(summary));
     }
 
@@ -256,11 +334,18 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Customer account deleted successfully"));
     }
 
+    @GetMapping("/customers/{id}")
+    public ResponseEntity<ApiResponse<User>> getCustomer(@PathVariable Long id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Customer", id));
+        return ResponseEntity.ok(ApiResponse.success(user));
+    }
+
     @GetMapping("/customers/{id}/bookings")
     public ResponseEntity<ApiResponse<List<BookingResponse>>> getCustomerBookings(@PathVariable Long id) {
-        List<BookingResponse> responses = bookingRepository.findByUser_IdOrderByCreatedAtDesc(id)
+        List<BookingResponse> responses = taskRequestRepository.findByUserIdOrderByCreatedAtDesc(id)
                 .stream()
-                .map(b -> BookingResponse.from(b, true, true))
+                .map(tr -> BookingResponse.from(tr, true))
                 .toList();
         return ResponseEntity.ok(ApiResponse.success(responses));
     }
@@ -286,11 +371,18 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(complaintRepository.findByCustomerIdOrderByCreatedAtDesc(id)));
     }
 
+    @GetMapping("/providers/{id}")
+    public ResponseEntity<ApiResponse<Provider>> getProvider(@PathVariable Long id) {
+        Provider provider = providerRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
+        return ResponseEntity.ok(ApiResponse.success(provider));
+    }
+
     @GetMapping("/providers/{id}/bookings")
     public ResponseEntity<ApiResponse<List<BookingResponse>>> getProviderBookings(@PathVariable Long id) {
-        List<BookingResponse> responses = bookingRepository.findByProvider_IdOrderByCreatedAtDesc(id)
+        List<BookingResponse> responses = taskRequestRepository.findAssignedTasksForProvider(id)
                 .stream()
-                .map(b -> BookingResponse.from(b, true, true))
+                .map(tr -> BookingResponse.from(tr, true))
                 .toList();
         return ResponseEntity.ok(ApiResponse.success(responses));
     }
@@ -421,9 +513,10 @@ public class AdminController {
                 .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
         BigDecimal rate = new BigDecimal(payload.get("commissionPercentage").toString());
         BigDecimal oldRate = provider.getCommissionPercentage();
+        String reason = (String) payload.get("reason");
         provider.setCommissionPercentage(rate);
         providerRepository.save(provider);
-        logAdminAction("Changed commission for provider " + provider.getName(), "Provider", String.valueOf(oldRate), String.valueOf(rate));
+        logAdminAction("Changed commission for provider " + provider.getName(), "Provider", String.valueOf(oldRate), String.valueOf(rate), reason);
         return ResponseEntity.ok(ApiResponse.success(null, "Provider commission updated"));
     }
 
@@ -433,9 +526,10 @@ public class AdminController {
         Provider provider = providerRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
         String address = (String) payload.get("address");
+        String reason = (String) payload.get("reason");
         provider.setAddress(address);
         providerRepository.save(provider);
-        logAdminAction("Assigned area to provider " + provider.getName(), "Provider", "", address);
+        logAdminAction("Assigned area to provider " + provider.getName(), "Provider", "", address, reason);
         return ResponseEntity.ok(ApiResponse.success(null, "Provider area assigned"));
     }
 
@@ -475,9 +569,190 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(null, "Incentive bonus awarded successfully"));
     }
 
+    // -------------------------------------------------------------------------
+    // PROVIDER DETAILS (PAGINATED)
+    // -------------------------------------------------------------------------
+
+    @GetMapping("/providers/{id}/metrics")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> getProviderMetrics(@PathVariable Long id) {
+        Provider provider = providerRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
+
+        java.util.Map<String, Object> metrics = new java.util.LinkedHashMap<>();
+
+        // Task counts
+        long totalTasks = taskRequestRepository.countAssignedByProvider(id);
+        long completedTasks = taskRequestRepository.countAssignedByProviderAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.COMPLETED);
+        long cancelledTasks = taskRequestRepository.countAssignedByProviderAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.CANCELLED);
+        long activeTasks = taskRequestRepository.countAssignedByProviderAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.STARTED);
+        long pendingTasks = taskRequestRepository.countAssignedByProviderAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.ACCEPTED);
+
+        metrics.put("totalTasks", totalTasks);
+        metrics.put("completedTasks", completedTasks);
+        metrics.put("cancelledTasks", cancelledTasks);
+        metrics.put("activeTasks", activeTasks);
+        metrics.put("pendingTasks", pendingTasks);
+        metrics.put("averageRating", provider.getRatingCache());
+        metrics.put("acceptanceRate", provider.getAcceptanceRate());
+        metrics.put("completionRate", provider.getCompletionRate());
+        metrics.put("cancellationRate", provider.getCancellationRate());
+        metrics.put("responseTimeMin", provider.getResponseTimeMin());
+        metrics.put("totalComplaints", complaintRepository.countByProviderId(id));
+
+        // Earnings
+        java.math.BigDecimal lifetimeEarnings = transactionRepository.sumProviderEarnings(id);
+        java.time.LocalDateTime startOfMonth = java.time.LocalDate.now().withDayOfMonth(1).atStartOfDay();
+        java.math.BigDecimal monthlyEarnings = transactionRepository.sumProviderEarningsSince(id, startOfMonth);
+        java.math.BigDecimal totalCommission = transactionRepository.sumProviderCommission(id);
+
+        metrics.put("lifetimeEarnings", lifetimeEarnings);
+        metrics.put("monthlyEarnings", monthlyEarnings);
+        metrics.put("totalCommission", totalCommission);
+        metrics.put("commissionPercentage", provider.getCommissionPercentage());
+
+        // Wallet
+        var walletOpt = providerWalletRepository.findByProviderId(id);
+        metrics.put("walletBalance", walletOpt.map(w -> w.getBalance()).orElse(java.math.BigDecimal.ZERO));
+        metrics.put("onlineEarnings", walletOpt.map(w -> w.getOnlineEarnings()).orElse(java.math.BigDecimal.ZERO));
+        metrics.put("codEarnings", walletOpt.map(w -> w.getCodEarnings()).orElse(java.math.BigDecimal.ZERO));
+        metrics.put("outstandingCommission", walletOpt.map(w -> w.getOutstandingCommission()).orElse(java.math.BigDecimal.ZERO));
+
+        return ResponseEntity.ok(ApiResponse.success(metrics));
+    }
+
+    @GetMapping("/providers/{id}/bookings-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.bookings.dto.BookingResponse>>> getProviderBookingsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        var tasks = taskRequestRepository.findAssignedTasksForProviderPaged(id, pageable);
+        var responses = tasks.map(t -> com.mitra.bookings.dto.BookingResponse.from(t, true));
+        return ResponseEntity.ok(ApiResponse.success(responses));
+    }
+
+    @GetMapping("/providers/{id}/earnings-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.bookings.Transaction>>> getProviderEarningsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        return ResponseEntity.ok(ApiResponse.success(transactionRepository.findByProviderIdOrderByCreatedAtDesc(id, pageable)));
+    }
+
+    @GetMapping("/providers/{id}/reviews-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.reviews.Review>>> getProviderReviewsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        return ResponseEntity.ok(ApiResponse.success(reviewRepository.findByProviderIdOrderByCreatedAtDesc(id, pageable)));
+    }
+
+    @GetMapping("/providers/{id}/complaints-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.common.Complaint>>> getProviderComplaintsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        return ResponseEntity.ok(ApiResponse.success(complaintRepository.findByProviderIdOrderByCreatedAtDesc(id, pageable)));
+    }
+
+    // -------------------------------------------------------------------------
+    // CUSTOMER DETAILS (PAGINATED)
+    // -------------------------------------------------------------------------
+
+    @GetMapping("/customers/{id}/metrics")
+    public ResponseEntity<ApiResponse<java.util.Map<String, Object>>> getCustomerMetrics(@PathVariable Long id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Customer", id));
+
+        java.util.Map<String, Object> metrics = new java.util.LinkedHashMap<>();
+
+        long totalBookings = taskRequestRepository.countByUserId(id);
+        long completedBookings = taskRequestRepository.countByUserIdAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.COMPLETED);
+        long cancelledBookings = taskRequestRepository.countByUserIdAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.CANCELLED);
+        long pendingBookings = taskRequestRepository.countByUserIdAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.OPEN)
+                + taskRequestRepository.countByUserIdAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.QUOTING);
+        long activeBookings = taskRequestRepository.countByUserIdAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.STARTED)
+                + taskRequestRepository.countByUserIdAndStatus(id, com.mitra.taskrequests.TaskRequestStatus.ACCEPTED);
+
+        metrics.put("totalBookings", totalBookings);
+        metrics.put("completedBookings", completedBookings);
+        metrics.put("cancelledBookings", cancelledBookings);
+        metrics.put("pendingBookings", pendingBookings);
+        metrics.put("activeBookings", activeBookings);
+        metrics.put("totalComplaints", complaintRepository.countByCustomerId(id));
+        metrics.put("rewardPoints", user.getRewardPoints());
+
+        java.math.BigDecimal lifetimeSpend = transactionRepository.sumCustomerSpend(id);
+        java.math.BigDecimal refundAmount = transactionRepository.sumCustomerRefunds(id);
+        metrics.put("lifetimeSpend", lifetimeSpend);
+        metrics.put("refundAmount", refundAmount);
+
+        if (totalBookings > 0) {
+            metrics.put("averageSpend", lifetimeSpend.divide(java.math.BigDecimal.valueOf(totalBookings), 2, java.math.RoundingMode.HALF_UP));
+        } else {
+            metrics.put("averageSpend", java.math.BigDecimal.ZERO);
+        }
+
+        return ResponseEntity.ok(ApiResponse.success(metrics));
+    }
+
+    @GetMapping("/customers/{id}/bookings-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.bookings.dto.BookingResponse>>> getCustomerBookingsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        var tasks = taskRequestRepository.findByUserIdOrderByCreatedAtDesc(id, pageable);
+        var responses = tasks.map(t -> com.mitra.bookings.dto.BookingResponse.from(t, true));
+        return ResponseEntity.ok(ApiResponse.success(responses));
+    }
+
+    @GetMapping("/customers/{id}/reviews-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.reviews.Review>>> getCustomerReviewsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        return ResponseEntity.ok(ApiResponse.success(reviewRepository.findByCustomerIdOrderByCreatedAtDesc(id, pageable)));
+    }
+
+    @GetMapping("/customers/{id}/complaints-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.common.Complaint>>> getCustomerComplaintsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        return ResponseEntity.ok(ApiResponse.success(complaintRepository.findByCustomerIdOrderByCreatedAtDesc(id, pageable)));
+    }
+
+    @GetMapping("/customers/{id}/transactions-paged")
+    public ResponseEntity<ApiResponse<org.springframework.data.domain.Page<com.mitra.bookings.Transaction>>> getCustomerTransactionsPaged(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by("createdAt").descending());
+        return ResponseEntity.ok(ApiResponse.success(transactionRepository.findByCustomerIdOrderByCreatedAtDesc(id, pageable)));
+    }
+
     // -----------------------------------------------------------------------------
     // BOOKING MANAGEMENT
     // -----------------------------------------------------------------------------
+
+    @GetMapping("/bookings/{id}")
+    public ResponseEntity<ApiResponse<com.mitra.bookings.dto.BookingResponse>> getBooking(@PathVariable Long id) {
+        var taskRequest = taskRequestRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Booking", id));
+        var response = com.mitra.bookings.dto.BookingResponse.from(taskRequest, true);
+        transactionRepository.findByBookingId(id).ifPresent(tx -> {
+            response.setCommissionStatus(tx.getCommissionStatus());
+            response.setCommissionDueDate(tx.getCommissionDueDate());
+            response.setSettlementStatus(tx.getSettlementStatus());
+        });
+        return ResponseEntity.ok(ApiResponse.success(response));
+    }
 
     @GetMapping("/bookings")
     public ResponseEntity<ApiResponse<Page<BookingResponse>>> getBookings(
@@ -491,14 +766,20 @@ public class AdminController {
                 ? org.springframework.data.domain.Sort.by(sortBy).ascending() 
                 : org.springframework.data.domain.Sort.by(sortBy).descending();
         org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, sort);
-        
-        BookingStatus statusEnum = null;
+
+        com.mitra.taskrequests.TaskRequestStatus taskStatus = null;
         if (status != null && !status.isEmpty() && !status.equalsIgnoreCase("ALL")) {
-            statusEnum = BookingStatus.valueOf(status.toUpperCase());
+            try {
+                if (status.equalsIgnoreCase("PENDING") || status.equalsIgnoreCase("ASSIGNED")) {
+                    taskStatus = com.mitra.taskrequests.TaskRequestStatus.QUOTING;
+                } else {
+                    taskStatus = com.mitra.taskrequests.TaskRequestStatus.valueOf(status.toUpperCase());
+                }
+            } catch (Exception e) {}
         }
         
-        Page<Booking> bookings = bookingRepository.findBookings(statusEnum, search, pageable);
-        Page<BookingResponse> responses = bookings.map(b -> BookingResponse.from(b, true, true));
+        Page<com.mitra.taskrequests.TaskRequest> tasks = taskRequestRepository.findTasks(taskStatus, search, pageable);
+        Page<BookingResponse> responses = tasks.map(t -> BookingResponse.from(t, true));
         return ResponseEntity.ok(ApiResponse.success(responses));
     }
 
@@ -558,12 +839,54 @@ public class AdminController {
 
     @PutMapping("/bookings/{id}/refund")
     @Transactional
-    public ResponseEntity<ApiResponse<Void>> refundBooking(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> refundBooking(
+            @PathVariable Long id, @RequestBody Map<String, Object> payload) {
         Booking booking = bookingRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Booking", id));
-        
-        logAdminAction("Issued refund for booking #" + id, "Booking", "PAID", "REFUNDED");
-        logBookingStatusHistory(id, String.valueOf(booking.getStatus()), "Refund processed and issued.");
+
+        String refundType = (String) payload.getOrDefault("refundType", "FULL");
+        String refundDestination = (String) payload.getOrDefault("refundDestination", "GATEWAY");
+        BigDecimal refundAmount = payload.containsKey("amount") ? new BigDecimal(payload.get("amount").toString()) : booking.getAmountNpr();
+        String reason = (String) payload.get("reason");
+
+        // Save refund parameters in transaction if transaction exists
+        List<Transaction> transactions = transactionRepository.findByProviderIdOrderByCreatedAtDesc(booking.getProvider() != null ? booking.getProvider().getId() : 0L);
+        Transaction transaction = transactions.stream()
+                .filter(t -> t.getBookingId().equals(id))
+                .findFirst().orElse(null);
+
+        if (transaction != null) {
+            transaction.setStatus("REFUNDED");
+            transaction.setRefundType(refundType);
+            transaction.setRefundDestination(refundDestination);
+            transactionRepository.save(transaction);
+
+            // If WALLET destination, deduct from provider earnings wallet
+            if ("WALLET".equals(refundDestination) && booking.getProvider() != null) {
+                ProviderWallet wallet = providerWalletRepository.findByProviderId(booking.getProvider().getId())
+                        .orElseGet(() -> providerWalletRepository.save(ProviderWallet.builder()
+                                .providerId(booking.getProvider().getId())
+                                .balance(BigDecimal.ZERO)
+                                .currency("NPR")
+                                .updatedAt(LocalDateTime.now())
+                                .build()));
+                BigDecimal oldBalance = wallet.getBalance();
+                BigDecimal newBalance = oldBalance.subtract(refundAmount);
+                wallet.setBalance(newBalance);
+                providerWalletRepository.save(wallet);
+
+                walletTransactionRepository.save(WalletTransaction.builder()
+                        .walletId(wallet.getId())
+                        .amount(refundAmount.negate())
+                        .type("REFUND")
+                        .description("Deduction due to client refund for Booking #" + id)
+                        .createdAt(LocalDateTime.now())
+                        .build());
+            }
+        }
+
+        logAdminAction("Issued " + refundType + " refund of " + refundAmount + " via " + refundDestination + " for booking #" + id, "Booking", "PAID", "REFUNDED", reason);
+        logBookingStatusHistory(id, String.valueOf(booking.getStatus()), "Refund (" + refundType + ") processed to " + refundDestination + ". Reason: " + reason);
         return ResponseEntity.ok(ApiResponse.success(null, "Refund processed successfully"));
     }
 
@@ -652,6 +975,13 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(payoutRequestRepository.findAllByOrderByCreatedAtDesc()));
     }
 
+    @GetMapping("/payments/payouts/{id}")
+    public ResponseEntity<ApiResponse<PayoutRequest>> getPayoutRequest(@PathVariable Long id) {
+        PayoutRequest req = payoutRequestRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("PayoutRequest", id));
+        return ResponseEntity.ok(ApiResponse.success(req));
+    }
+
     @PutMapping("/payments/payouts/{id}/release")
     @Transactional
     public ResponseEntity<ApiResponse<Void>> releasePayout(@PathVariable Long id) {
@@ -692,6 +1022,13 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(complaintRepository.findAllByOrderByCreatedAtDesc()));
     }
 
+    @GetMapping("/complaints/{id}")
+    public ResponseEntity<ApiResponse<Complaint>> getComplaint(@PathVariable Long id) {
+        Complaint complaint = complaintRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
+        return ResponseEntity.ok(ApiResponse.success(complaint));
+    }
+
     @GetMapping("/complaints/{id}/messages")
     public ResponseEntity<ApiResponse<List<ComplaintMessage>>> getComplaintMessages(@PathVariable Long id) {
         return ResponseEntity.ok(ApiResponse.success(complaintMessageRepository.findByComplaintIdOrderByCreatedAtAsc(id)));
@@ -713,13 +1050,54 @@ public class AdminController {
 
     @PutMapping("/complaints/{id}/resolve")
     @Transactional
-    public ResponseEntity<ApiResponse<Void>> resolveComplaint(@PathVariable Long id) {
+    public ResponseEntity<ApiResponse<Void>> resolveComplaint(
+            @PathVariable Long id, @RequestBody Map<String, Object> body) {
         Complaint complaint = complaintRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
+
+        String category = (String) body.get("category");
+        String winner = (String) body.get("winner");
+        BigDecimal refundAmount = body.containsKey("refundAmount") ? new BigDecimal(body.get("refundAmount").toString()) : BigDecimal.ZERO;
+        BigDecimal penaltyAmount = body.containsKey("penaltyAmount") ? new BigDecimal(body.get("penaltyAmount").toString()) : BigDecimal.ZERO;
+        BigDecimal compensationAmount = body.containsKey("compensationAmount") ? new BigDecimal(body.get("compensationAmount").toString()) : BigDecimal.ZERO;
+        String reason = (String) body.get("reason");
+        String decision = (String) body.get("decision");
+
         complaint.setStatus("RESOLVED");
         complaint.setResolvedAt(LocalDateTime.now());
+        if (category != null) complaint.setCategory(category);
+        if (winner != null) complaint.setWinner(winner);
+        if (refundAmount != null) complaint.setRefundAmount(refundAmount);
+        if (penaltyAmount != null) complaint.setPenaltyAmount(penaltyAmount);
+        if (compensationAmount != null) complaint.setCompensationAmount(compensationAmount);
+        if (decision != null) complaint.setInternalNotes(decision);
+
         complaintRepository.save(complaint);
-        logAdminAction("Resolved complaint #" + id, "Complaint", "PENDING", "RESOLVED");
+
+        // If penaltyAmount > 0, debit the provider's wallet
+        if (penaltyAmount != null && penaltyAmount.compareTo(BigDecimal.ZERO) > 0 && complaint.getProviderId() != null) {
+            ProviderWallet wallet = providerWalletRepository.findByProviderId(complaint.getProviderId())
+                    .orElseGet(() -> providerWalletRepository.save(ProviderWallet.builder()
+                            .providerId(complaint.getProviderId())
+                            .balance(BigDecimal.ZERO)
+                            .currency("NPR")
+                            .updatedAt(LocalDateTime.now())
+                            .build()));
+            BigDecimal oldBalance = wallet.getBalance();
+            BigDecimal newBalance = oldBalance.subtract(penaltyAmount);
+            wallet.setBalance(newBalance);
+            providerWalletRepository.save(wallet);
+
+            walletTransactionRepository.save(WalletTransaction.builder()
+                    .walletId(wallet.getId())
+                    .amount(penaltyAmount.negate())
+                    .type("PENALTY")
+                    .description("Penalty fee due to resolved Dispute Case #" + id)
+                    .createdAt(LocalDateTime.now())
+                    .build());
+        }
+
+        logAdminAction("Resolved complaint #" + id + ". Winner: " + winner + ", Refund: " + refundAmount + ", Penalty: " + penaltyAmount, "Complaint", "PENDING", "RESOLVED", reason);
         return ResponseEntity.ok(ApiResponse.success(null, "Complaint resolved successfully"));
     }
 
@@ -760,8 +1138,11 @@ public class AdminController {
             @RequestParam(required = false) String search,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size);
-        return ResponseEntity.ok(ApiResponse.success(reviewRepository.findReviews(search, pageable)));
+        org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(page, size, org.springframework.data.domain.Sort.by(org.springframework.data.domain.Sort.Direction.DESC, "id"));
+        if (search == null || search.trim().isEmpty()) {
+            return ResponseEntity.ok(ApiResponse.success(reviewRepository.findAll(pageable)));
+        }
+        return ResponseEntity.ok(ApiResponse.success(reviewRepository.findReviews(search.trim(), pageable)));
     }
 
     @PutMapping("/reviews/{id}/hide")
@@ -791,13 +1172,27 @@ public class AdminController {
     // -----------------------------------------------------------------------------
 
     @PostMapping("/notifications/broadcast")
+    @Transactional
     public ResponseEntity<ApiResponse<Void>> sendBroadcast(@RequestBody Map<String, String> payload) {
         String target = payload.get("target"); // ALL_CUSTOMERS, ALL_PROVIDERS, SELECTED_USERS
-        String type = payload.get("type"); // PUSH, EMAIL, SMS
+        String channel = payload.get("channel"); // PUSH, EMAIL, SMS
+        if (channel == null) channel = payload.getOrDefault("type", "PUSH");
+        String title = payload.get("title");
         String content = payload.get("content");
+        String reason = payload.get("reason");
         
-        log.info("Mock broadcast sent to: {} using {}. Content: {}", target, type, content);
-        logAdminAction("Sent broadcast notification to: " + target, "Notification", "", content);
+        BroadcastNotification notification = BroadcastNotification.builder()
+                .targetGroup(target != null ? target : "ALL")
+                .channel(channel)
+                .title(title)
+                .content(content != null ? content : "")
+                .sentAt(LocalDateTime.now())
+                .sentBy(getAdminIdentity())
+                .build();
+        broadcastNotificationRepository.save(notification);
+
+        log.info("Mock broadcast sent to: {} using {}. Content: {}", target, channel, content);
+        logAdminAction("Sent broadcast notification to: " + target, "Notification", "", content, reason);
         return ResponseEntity.ok(ApiResponse.success(null, "Notification broadcast sent successfully"));
     }
 
@@ -868,6 +1263,282 @@ public class AdminController {
     @GetMapping("/audit-logs")
     public ResponseEntity<ApiResponse<List<AuditLog>>> getAuditLogs() {
         return ResponseEntity.ok(ApiResponse.success(auditLogRepository.findAllByOrderByTimestampDesc()));
+    }
+
+    // -----------------------------------------------------------------------------
+    // OPERATIONS CONTROL & HEALTH
+    // -----------------------------------------------------------------------------
+
+    @GetMapping("/analytics/health")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getSystemHealth() {
+        long bookingsToday = bookingRepository.countBookingsCreatedAfter(LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0))
+                + taskRequestRepository.countTasksCreatedAfter(LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0));
+        BigDecimal revenueToday = transactionRepository.sumCommissionSince(LocalDateTime.now().withHour(0).withMinute(0).withSecond(0).withNano(0));
+        long pendingComplaints = complaintRepository.countByStatus("PENDING");
+        long pendingPayouts = payoutRequestRepository.countByStatus("PENDING");
+        long pendingRefunds = complaintRepository.countByCategoryAndStatus("REFUND_ISSUE", "PENDING")
+                + transactionRepository.countByStatus("PENDING_REFUND");
+        long pendingVerification = providerRepository.countByStatus("PENDING_REVIEW");
+        long providersOnline = providerRepository.countByIsOnline(true);
+        long jobsWaiting = bookingRepository.countByProviderIsNullAndStatus(BookingStatus.PENDING_DISPATCH);
+
+        // Low supply categories
+        List<String> lowSupplyCategories = new ArrayList<>();
+        for (String cat : java.util.Arrays.asList("ELECTRICAL", "PLUMBING", "CLEANING", "AC", "PAINTING")) {
+            if (providerRepository.findEligibleProviders(cat).isEmpty()) {
+                lowSupplyCategories.add(cat);
+            }
+        }
+
+        List<String> highCancellationAreas = new ArrayList<>(); // fallback list
+
+        Map<String, Object> health = new HashMap<>();
+        health.put("bookingsToday", bookingsToday);
+        health.put("revenueToday", revenueToday);
+        health.put("pendingComplaints", pendingComplaints);
+        health.put("pendingPayouts", pendingPayouts);
+        health.put("pendingRefunds", pendingRefunds);
+        health.put("pendingVerification", pendingVerification);
+        health.put("providersOnline", providersOnline);
+        health.put("jobsWaiting", jobsWaiting);
+        health.put("lowSupplyAreas", lowSupplyCategories);
+        health.put("highCancellationAreas", highCancellationAreas);
+
+        return ResponseEntity.ok(ApiResponse.success(health));
+    }
+
+    @GetMapping("/providers/{id}/strikes")
+    public ResponseEntity<ApiResponse<List<ProviderStrike>>> getProviderStrikes(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(providerStrikeRepository.findByProviderIdOrderByCreatedAtDesc(id)));
+    }
+
+    @PostMapping("/providers/{id}/strikes")
+    @Transactional
+    public ResponseEntity<ApiResponse<ProviderStrike>> addProviderStrike(
+            @PathVariable Long id, @RequestBody Map<String, Object> payload) {
+        Provider provider = providerRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
+
+        String reason = (String) payload.get("reason");
+        String notes = (String) payload.get("notes");
+        String createdBy = getAdminIdentity();
+
+        long existingCount = providerStrikeRepository.countByProviderId(id);
+        int nextStrikeNum = (int) (existingCount + 1);
+
+        ProviderStrike strike = ProviderStrike.builder()
+                .providerId(id)
+                .strikeNumber(nextStrikeNum)
+                .reason(reason != null ? reason : "Rule violation")
+                .createdBy(createdBy)
+                .createdAt(LocalDateTime.now())
+                .expiresAt(LocalDateTime.now().plusDays(30)) // Default 30 days expiry
+                .internalNotes(notes)
+                .build();
+
+        providerStrikeRepository.save(strike);
+
+        String oldStatus = provider.getStatus();
+        String newStatus = oldStatus;
+        if (nextStrikeNum == 2 || nextStrikeNum == 3) {
+            newStatus = "SUSPENDED";
+            provider.setStatus(newStatus);
+            providerRepository.save(provider);
+        } else if (nextStrikeNum >= 4) {
+            newStatus = "BLACK_LISTED";
+            provider.setStatus(newStatus);
+            providerRepository.save(provider);
+        }
+
+        logAdminAction("Issued Strike #" + nextStrikeNum + " to provider " + provider.getName(), "Provider", oldStatus, newStatus, reason);
+        return ResponseEntity.ok(ApiResponse.success(strike, "Strike issued successfully"));
+    }
+
+    @PutMapping("/providers/{id}/status")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> updateProviderStatus(
+            @PathVariable Long id, @RequestBody Map<String, String> payload) {
+        Provider provider = providerRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Provider", id));
+
+        String newStatus = payload.get("status");
+        String reason = payload.get("reason");
+        if (newStatus == null || newStatus.isBlank()) {
+            throw new BadRequestException("Status is required");
+        }
+
+        String dbStatus = newStatus;
+        if ("VERIFIED".equals(newStatus)) {
+            dbStatus = "APPROVED";
+        } else if ("BLACKLISTED".equals(newStatus)) {
+            dbStatus = "BLACK_LISTED";
+        }
+
+        String oldStatus = provider.getStatus();
+        provider.setStatus(dbStatus);
+        providerRepository.save(provider);
+
+        logAdminAction("Updated provider status to " + dbStatus, "Provider", oldStatus, dbStatus, reason);
+        return ResponseEntity.ok(ApiResponse.success(null, "Provider status updated successfully"));
+    }
+
+    @PutMapping("/customers/{id}/permissions")
+    @Transactional
+    public ResponseEntity<ApiResponse<User>> updateCustomerPermissions(
+            @PathVariable Long id, @RequestBody Map<String, Object> payload) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Customer", id));
+
+        String reason = (String) payload.get("reason");
+        if (payload.containsKey("couponsDisabled")) {
+            user.setCouponsDisabled((Boolean) payload.get("couponsDisabled"));
+        }
+        if (payload.containsKey("rewardsDisabled")) {
+            user.setRewardsDisabled((Boolean) payload.get("rewardsDisabled"));
+        }
+        if (payload.containsKey("bookingsLimited")) {
+            user.setBookingsLimited((Boolean) payload.get("bookingsLimited"));
+        }
+
+        userRepository.save(user);
+        logAdminAction("Updated customer trust flags for " + user.getName(), "User", "", "", reason);
+        return ResponseEntity.ok(ApiResponse.success(user, "Customer permissions updated successfully"));
+    }
+
+    @PutMapping("/bookings/{id}/pause")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> pauseBooking(
+            @PathVariable Long id, @RequestBody Map<String, String> payload) {
+        Booking booking = bookingRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Booking", id));
+
+        String reason = payload.get("reason");
+        booking.setIsPaused(true);
+        bookingRepository.save(booking);
+
+        logAdminAction("Paused booking #" + id, "Booking", "ACTIVE", "PAUSED", reason);
+        logBookingStatusHistory(id, "PAUSED", "Booking paused: " + reason);
+        return ResponseEntity.ok(ApiResponse.success(null, "Booking paused successfully"));
+    }
+
+    @PutMapping("/bookings/{id}/resume")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> resumeBooking(
+            @PathVariable Long id, @RequestBody Map<String, String> payload) {
+        Booking booking = bookingRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Booking", id));
+
+        String reason = payload.get("reason");
+        booking.setIsPaused(false);
+        bookingRepository.save(booking);
+
+        logAdminAction("Resumed booking #" + id, "Booking", "PAUSED", "ACTIVE", reason);
+        logBookingStatusHistory(id, "RESUMED", "Booking resumed: " + reason);
+        return ResponseEntity.ok(ApiResponse.success(null, "Booking resumed successfully"));
+    }
+
+    @PutMapping("/bookings/{id}/escalate")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> escalateBooking(
+            @PathVariable Long id, @RequestBody Map<String, String> payload) {
+        Booking booking = bookingRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Booking", id));
+
+        String reason = payload.get("reason");
+        booking.setIsEscalated(true);
+        bookingRepository.save(booking);
+
+        logAdminAction("Escalated booking #" + id, "Booking", "NORMAL", "ESCALATED", reason);
+        logBookingStatusHistory(id, "ESCALATED", "Booking escalated: " + reason);
+        return ResponseEntity.ok(ApiResponse.success(null, "Booking escalated successfully"));
+    }
+
+    @GetMapping("/providers/{id}/wallet")
+    public ResponseEntity<ApiResponse<ProviderWallet>> getProviderWallet(@PathVariable Long id) {
+        ProviderWallet wallet = providerWalletRepository.findByProviderId(id)
+                .orElseGet(() -> {
+                    ProviderWallet w = ProviderWallet.builder()
+                            .providerId(id)
+                            .balance(BigDecimal.ZERO)
+                            .currency("NPR")
+                            .updatedAt(LocalDateTime.now())
+                            .build();
+                    return providerWalletRepository.save(w);
+                });
+        return ResponseEntity.ok(ApiResponse.success(wallet));
+    }
+
+    @PostMapping("/providers/{id}/wallet/adjust")
+    @Transactional
+    public ResponseEntity<ApiResponse<ProviderWallet>> adjustProviderWallet(
+            @PathVariable Long id, @RequestBody Map<String, Object> payload) {
+        ProviderWallet wallet = providerWalletRepository.findByProviderId(id)
+                .orElseGet(() -> {
+                    ProviderWallet w = ProviderWallet.builder()
+                            .providerId(id)
+                            .balance(BigDecimal.ZERO)
+                            .currency("NPR")
+                            .updatedAt(LocalDateTime.now())
+                            .build();
+                    return providerWalletRepository.save(w);
+                });
+
+        BigDecimal amount = new BigDecimal(payload.get("amount").toString());
+        String type = (String) payload.get("type"); // CREDIT, DEBIT, REFUND, PENALTY, ADJUSTMENT
+        String description = (String) payload.get("description");
+        String reason = (String) payload.get("reason");
+
+        BigDecimal oldBalance = wallet.getBalance();
+        BigDecimal newBalance = oldBalance.add(amount);
+        wallet.setBalance(newBalance);
+        wallet.setUpdatedAt(LocalDateTime.now());
+        providerWalletRepository.save(wallet);
+
+        WalletTransaction tx = WalletTransaction.builder()
+                .walletId(wallet.getId())
+                .amount(amount)
+                .type(type != null ? type : "ADJUSTMENT")
+                .description(description != null ? description : "Manual adjustment")
+                .createdAt(LocalDateTime.now())
+                .build();
+        walletTransactionRepository.save(tx);
+
+        logAdminAction("Adjusted provider wallet balance by " + amount, "ProviderWallet", String.valueOf(oldBalance), String.valueOf(newBalance), reason);
+        return ResponseEntity.ok(ApiResponse.success(wallet, "Wallet balance adjusted successfully"));
+    }
+
+    @PutMapping("/reviews/{id}/moderate")
+    @Transactional
+    public ResponseEntity<ApiResponse<Review>> moderateReview(
+            @PathVariable Long id, @RequestBody Map<String, Object> payload) {
+        Review review = reviewRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Review", id));
+
+        String reason = (String) payload.get("reason");
+        if (payload.containsKey("isReported")) {
+            review.setIsReported((Boolean) payload.get("isReported"));
+        }
+        if (payload.containsKey("reportReason")) {
+            review.setReportReason((String) payload.get("reportReason"));
+        }
+        if (payload.containsKey("appealStatus")) {
+            review.setAppealStatus((String) payload.get("appealStatus")); // PENDING, APPROVED, REJECTED
+        }
+        if (payload.containsKey("moderationNotes")) {
+            review.setModerationNotes((String) payload.get("moderationNotes"));
+        }
+        if (payload.containsKey("isHidden")) {
+            review.setIsHidden((Boolean) payload.get("isHidden"));
+        }
+
+        reviewRepository.save(review);
+        logAdminAction("Moderated review #" + id, "Review", "", "", reason);
+        return ResponseEntity.ok(ApiResponse.success(review, "Review moderated successfully"));
+    }
+
+    @GetMapping("/notifications/broadcast/history")
+    public ResponseEntity<ApiResponse<List<BroadcastNotification>>> getBroadcastHistory() {
+        return ResponseEntity.ok(ApiResponse.success(broadcastNotificationRepository.findAllByOrderBySentAtDesc()));
     }
 
     // -----------------------------------------------------------------------------

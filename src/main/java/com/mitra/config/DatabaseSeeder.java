@@ -41,6 +41,43 @@ public class DatabaseSeeder implements CommandLineRunner {
         executeAlterSafe("ALTER TABLE providers ADD COLUMN age INT NULL");
         executeAlterSafe("ALTER TABLE providers ADD COLUMN description TEXT NULL");
 
+        // V11 safety synchronization
+        executeAlterSafe("ALTER TABLE users ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE");
+        executeAlterSafe("ALTER TABLE reviews ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT FALSE");
+        executeAlterSafe("ALTER TABLE complaints ADD COLUMN assigned_admin_id BIGINT NULL");
+        executeAlterSafe("ALTER TABLE complaints ADD COLUMN internal_notes TEXT NULL");
+
+        // V12 safety synchronization
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS coupons (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "code VARCHAR(50) UNIQUE NOT NULL," +
+                "discount_type VARCHAR(20) NOT NULL," +
+                "discount_value DECIMAL(12,2) NOT NULL," +
+                "max_discount DECIMAL(12,2)," +
+                "min_booking_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00," +
+                "start_date DATETIME NOT NULL," +
+                "expiry_date DATETIME NOT NULL," +
+                "usage_limit INT NOT NULL DEFAULT 0," +
+                "usage_per_customer INT NOT NULL DEFAULT 1," +
+                "applicable_category VARCHAR(100)," +
+                "is_active BOOLEAN NOT NULL DEFAULT TRUE," +
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
+                "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)");
+
+        executeAlterSafe("CREATE TABLE IF NOT EXISTS coupon_usages (" +
+                "id BIGINT AUTO_INCREMENT PRIMARY KEY," +
+                "coupon_id BIGINT NOT NULL," +
+                "user_id BIGINT NOT NULL," +
+                "task_request_id BIGINT," +
+                "booking_id BIGINT," +
+                "discount_amount DECIMAL(12,2) NOT NULL," +
+                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP," +
+                "FOREIGN KEY (coupon_id) REFERENCES coupons(id) ON DELETE CASCADE)");
+
+        executeAlterSafe("ALTER TABLE task_requests ADD COLUMN coupon_code VARCHAR(50)");
+        executeAlterSafe("ALTER TABLE task_requests ADD COLUMN coupon_discount_npr DECIMAL(12,2) DEFAULT 0.00");
+        executeAlterSafe("ALTER TABLE task_requests ADD COLUMN payment_method VARCHAR(50)");
+
         // 1. Synchronize OtpVerification columns
         executeAlterSafe("ALTER TABLE otp_verifications MODIFY COLUMN otp VARCHAR(6) NOT NULL");
         executeAlterSafe("ALTER TABLE otp_verifications MODIFY COLUMN phone VARCHAR(20) NOT NULL");
@@ -252,18 +289,7 @@ public class DatabaseSeeder implements CommandLineRunner {
             log.warn("Could not drop unused tables or migrate constraints: {}", e.getMessage());
         }
 
-        try {
-            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
-            jdbcTemplate.execute("TRUNCATE TABLE booking_status_history");
-            jdbcTemplate.execute("TRUNCATE TABLE chat_messages");
-            jdbcTemplate.execute("TRUNCATE TABLE reviews");
-            jdbcTemplate.execute("TRUNCATE TABLE complaints");
-            jdbcTemplate.execute("TRUNCATE TABLE bookings");
-            jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 1");
-            log.info("Successfully removed all legacy bookings and associated records from the database.");
-        } catch (Exception e) {
-            log.warn("Could not clean up legacy bookings: {}", e.getMessage());
-        }
+        // Legacy bookings cleanup completed. Persistent database tracking enabled.
 
         try {
             jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
@@ -278,6 +304,29 @@ public class DatabaseSeeder implements CommandLineRunner {
             log.info("Successfully deleted all marketplace task requests (bookings) created before 13 July 2026.");
         } catch (Exception e) {
             log.warn("Could not clean up legacy task requests: {}", e.getMessage());
+        }
+
+        try {
+            java.util.List<java.util.Map<String, Object>> dbUsers = jdbcTemplate.queryForList("SELECT id, name, phone FROM users");
+            log.info("📊 DATABASE USERS (Total: {}):", dbUsers.size());
+            for (java.util.Map<String, Object> u : dbUsers) {
+                log.info("   User ID: {}, Name: {}, Phone: {}", u.get("id"), u.get("name"), u.get("phone"));
+            }
+
+            java.util.List<java.util.Map<String, Object>> dbProviders = jdbcTemplate.queryForList("SELECT id, name, phone FROM providers");
+            log.info("📊 DATABASE PROVIDERS (Total: {}):", dbProviders.size());
+            for (java.util.Map<String, Object> p : dbProviders) {
+                log.info("   Provider ID: {}, Name: {}, Phone: {}", p.get("id"), p.get("name"), p.get("phone"));
+            }
+
+            java.util.List<java.util.Map<String, Object>> dbReviews = jdbcTemplate.queryForList("SELECT * FROM reviews");
+            log.info("📊 DATABASE REVIEWS (Total: {}):", dbReviews.size());
+            for (java.util.Map<String, Object> r : dbReviews) {
+                log.info("   Review ID: {}, booking_id: {}, customer_id: {}, provider_id: {}, rating: {}, comment: {}, is_hidden: {}",
+                        r.get("id"), r.get("booking_id"), r.get("customer_id"), r.get("provider_id"), r.get("rating"), r.get("comment"), r.get("is_hidden"));
+            }
+        } catch (Exception e) {
+            log.error("Failed to query database diagnostics in seeder", e);
         }
 
         log.info("Database schema check complete. Validating default service seeds...");

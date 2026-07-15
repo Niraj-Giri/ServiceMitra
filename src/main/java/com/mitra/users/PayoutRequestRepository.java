@@ -9,4 +9,5 @@ public interface PayoutRequestRepository extends JpaRepository<PayoutRequest, Lo
     List<PayoutRequest> findAllByOrderByCreatedAtDesc();
     List<PayoutRequest> findByProviderIdOrderByCreatedAtDesc(Long providerId);
     List<PayoutRequest> findByStatusOrderByCreatedAtDesc(String status);
+    long countByStatus(String status);
 }

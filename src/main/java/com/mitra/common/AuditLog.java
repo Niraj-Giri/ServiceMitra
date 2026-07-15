@@ -36,4 +36,7 @@ public class AuditLog {
 
     @Column(name = "ip_address")
     private String ipAddress;
+
+    @Column(name = "reason", columnDefinition = "TEXT")
+    private String reason;
 }

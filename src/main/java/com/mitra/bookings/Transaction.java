@@ -38,6 +38,21 @@ public class Transaction {
     @Column(name = "status", nullable = false)
     private String status; // PENDING, RELEASED, HELD, REFUNDED
 
+    @Column(name = "commission_status", length = 20)
+    private String commissionStatus; // PENDING, PAID, OVERDUE, AUTO_DEDUCTED
+
+    @Column(name = "commission_due_date")
+    private LocalDateTime commissionDueDate;
+
+    @Column(name = "settlement_status", length = 20)
+    private String settlementStatus; // PENDING, PAID, OVERDUE, AUTO_DEDUCTED
+
+    @Column(name = "refund_type")
+    private String refundType; // PARTIAL, FULL
+
+    @Column(name = "refund_destination")
+    private String refundDestination; // WALLET, GATEWAY
+
     @Column(name = "transaction_id", nullable = false)
     private String transactionId;
 

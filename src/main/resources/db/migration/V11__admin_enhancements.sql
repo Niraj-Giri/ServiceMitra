@@ -1,4 +1,1 @@
-ALTER TABLE users ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE reviews ADD COLUMN is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE complaints ADD COLUMN assigned_admin_id BIGINT NULL;
-ALTER TABLE complaints ADD COLUMN internal_notes TEXT NULL;
+-- Empty migration (columns already exist in target database)

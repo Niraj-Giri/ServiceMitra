@@ -66,4 +66,39 @@ public interface TaskRequestRepository extends JpaRepository<TaskRequest, Long> 
     @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"user"})
     @Query("SELECT tr FROM TaskRequest tr JOIN Quote q ON tr.acceptedQuoteId = q.id WHERE q.provider.id = :providerId ORDER BY tr.createdAt DESC")
     List<TaskRequest> findAssignedTasksForProvider(@Param("providerId") Long providerId);
+
+    long countByStatus(TaskRequestStatus status);
+
+    @Query("SELECT COUNT(tr) FROM TaskRequest tr WHERE tr.createdAt >= :startOfDay")
+    long countTasksCreatedAfter(@Param("startOfDay") java.time.LocalDateTime startOfDay);
+
+    @Query("""
+        SELECT tr FROM TaskRequest tr
+        WHERE (:status IS NULL OR tr.status = :status)
+          AND (:search IS NULL OR :search = '' OR CAST(tr.id AS string) LIKE CONCAT('%', :search, '%')
+                             OR LOWER(tr.user.name) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR LOWER(tr.title) LIKE LOWER(CONCAT('%', :search, '%'))
+                             OR LOWER(tr.serviceName) LIKE LOWER(CONCAT('%', :search, '%')))
+    """)
+    org.springframework.data.domain.Page<TaskRequest> findTasks(
+        @Param("status") TaskRequestStatus status,
+        @Param("search") String search,
+        org.springframework.data.domain.Pageable pageable
+    );
+
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = {"user"})
+    org.springframework.data.domain.Page<TaskRequest> findByUserIdOrderByCreatedAtDesc(Long userId, org.springframework.data.domain.Pageable pageable);
+
+    @Query("SELECT tr FROM TaskRequest tr JOIN Quote q ON tr.acceptedQuoteId = q.id WHERE q.provider.id = :providerId ORDER BY tr.createdAt DESC")
+    org.springframework.data.domain.Page<TaskRequest> findAssignedTasksForProviderPaged(@Param("providerId") Long providerId, org.springframework.data.domain.Pageable pageable);
+
+    long countByUserId(Long userId);
+
+    long countByUserIdAndStatus(Long userId, TaskRequestStatus status);
+
+    @Query("SELECT COUNT(tr) FROM TaskRequest tr JOIN Quote q ON tr.acceptedQuoteId = q.id WHERE q.provider.id = :providerId AND tr.status = :status")
+    long countAssignedByProviderAndStatus(@Param("providerId") Long providerId, @Param("status") TaskRequestStatus status);
+
+    @Query("SELECT COUNT(tr) FROM TaskRequest tr JOIN Quote q ON tr.acceptedQuoteId = q.id WHERE q.provider.id = :providerId")
+    long countAssignedByProvider(@Param("providerId") Long providerId);
 }

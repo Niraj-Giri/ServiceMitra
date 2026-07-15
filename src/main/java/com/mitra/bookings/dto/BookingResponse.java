@@ -47,6 +47,14 @@ public class BookingResponse {
     // OTP (only returned for customer's own booking when status = ACCEPTED)
     private String startOtp;
 
+    // Finance info
+    private String paymentMethod;
+    private String paymentStatus;
+    private String paymentReceivedBy;
+    private String commissionStatus;
+    private LocalDateTime commissionDueDate;
+    private String settlementStatus;
+
     // Timestamps
     private LocalDateTime startedAt;
     private LocalDateTime completedAt;
@@ -138,6 +146,100 @@ public class BookingResponse {
                 .cancelledBy(booking.getCancelledBy())
                 .cancellationReason(booking.getCancellationReason())
                 .createdAt(booking.getCreatedAt())
+                .build();
+    }
+
+    public static BookingResponse from(com.mitra.taskrequests.TaskRequest taskRequest, boolean showOtp) {
+        BookingResponse.CustomerInfo customerInfo = null;
+        if (taskRequest.getUser() != null) {
+            customerInfo = CustomerInfo.builder()
+                    .id(taskRequest.getUser().getId())
+                    .name(taskRequest.getUser().getName())
+                    .phone(taskRequest.getUser().getPhone())
+                    .profilePhoto(taskRequest.getUser().getProfilePhoto())
+                    .build();
+        }
+
+        BookingResponse.ProviderInfo providerInfo = null;
+        if (taskRequest.getAcceptedQuoteId() != null && taskRequest.getQuotes() != null) {
+            com.mitra.taskrequests.Quote acceptedQuote = taskRequest.getQuotes().stream()
+                    .filter(q -> q.getId().equals(taskRequest.getAcceptedQuoteId()))
+                    .findFirst()
+                    .orElse(null);
+            if (acceptedQuote != null && acceptedQuote.getProvider() != null) {
+                providerInfo = ProviderInfo.builder()
+                        .id(acceptedQuote.getProvider().getId())
+                        .name(acceptedQuote.getProvider().getBusinessName() != null ? acceptedQuote.getProvider().getBusinessName() : acceptedQuote.getProvider().getName())
+                        .phone(acceptedQuote.getProvider().getPhone())
+                        .profilePhoto(acceptedQuote.getProvider().getProfilePhotoUrl())
+                        .rating(acceptedQuote.getProvider().getRatingCache())
+                        .totalJobs(acceptedQuote.getProvider().getTotalJobs())
+                        .build();
+            }
+        }
+
+        BigDecimal providerEarnings = null;
+        if (taskRequest.getFinalAmountNpr() != null && taskRequest.getPlatformFee() != null) {
+            providerEarnings = taskRequest.getFinalAmountNpr().subtract(taskRequest.getPlatformFee());
+        }
+
+        BookingStatus status = BookingStatus.PENDING_DISPATCH;
+        if (taskRequest.getStatus() != null) {
+            switch (taskRequest.getStatus()) {
+                case OPEN:
+                case QUOTING:
+                    status = BookingStatus.PENDING_DISPATCH;
+                    break;
+                case ACCEPTED:
+                    status = BookingStatus.ACCEPTED;
+                    break;
+                case STARTED:
+                    status = BookingStatus.STARTED;
+                    break;
+                case COMPLETED:
+                    status = BookingStatus.COMPLETED;
+                    break;
+                case CANCELLED:
+                    if ("PROVIDER".equalsIgnoreCase(taskRequest.getCancelledBy())) {
+                        status = BookingStatus.CANCELLED_BY_PROVIDER;
+                    } else if ("ADMIN".equalsIgnoreCase(taskRequest.getCancelledBy())) {
+                        status = BookingStatus.CANCELLED_BY_ADMIN;
+                    } else {
+                        status = BookingStatus.CANCELLED_BY_CUSTOMER;
+                    }
+                    break;
+                case EXPIRED:
+                    status = BookingStatus.CANCELLED_BY_ADMIN;
+                    break;
+            }
+        }
+
+        return BookingResponse.builder()
+                .id(taskRequest.getId())
+                .status(status)
+                .serviceId(taskRequest.getServiceId())
+                .serviceName(taskRequest.getServiceName() != null ? taskRequest.getServiceName() : taskRequest.getTitle())
+                .customer(customerInfo)
+                .provider(providerInfo)
+                .address(taskRequest.getAddress())
+                .notes(taskRequest.getDescription())
+                .scheduledAt(taskRequest.getPreferredDate() != null ? taskRequest.getPreferredDate().atStartOfDay() : taskRequest.getCreatedAt())
+                .baseAmount(taskRequest.getFinalAmountNpr() != null ? taskRequest.getFinalAmountNpr() : taskRequest.getBudgetMinNpr())
+                .platformFee(taskRequest.getPlatformFee())
+                .totalBill(taskRequest.getFinalAmountNpr())
+                .providerEarnings(providerEarnings)
+                .pointsRedeemed(taskRequest.getPointsRedeemed())
+                .pointsDiscountNpr(taskRequest.getPointsDiscountNpr())
+                .startOtp(showOtp && status == BookingStatus.ACCEPTED ? taskRequest.getStartOtp() : null)
+                .paymentMethod(taskRequest.getPaymentMethod())
+                .paymentStatus(taskRequest.getPaymentStatus())
+                .paymentReceivedBy(taskRequest.getPaymentReceivedBy())
+                .startedAt(taskRequest.getStartedAt())
+                .completedAt(taskRequest.getCompletedAt())
+                .cancelledAt(taskRequest.getCancelledAt())
+                .cancelledBy(taskRequest.getCancelledBy())
+                .cancellationReason(taskRequest.getCancellationReason())
+                .createdAt(taskRequest.getCreatedAt())
                 .build();
     }
 }

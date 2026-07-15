@@ -14,6 +14,8 @@ import com.mitra.users.Provider;
 import com.mitra.users.ProviderIncentive;
 import com.mitra.users.ProviderIncentiveRepository;
 import com.mitra.users.ProviderRepository;
+import com.mitra.users.ProviderWallet;
+import com.mitra.users.ProviderWalletRepository;
 import com.mitra.users.User;
 import com.mitra.users.UserRepository;
 import com.mitra.bookings.*;
@@ -60,6 +62,7 @@ public class TaskRequestService {
     private final CouponRepository couponRepository;
     private final CouponUsageRepository couponUsageRepository;
     private final TransactionRepository transactionRepository;
+    private final ProviderWalletRepository providerWalletRepository;
 
     // ─────────────────────────────────────────────────────────────────────────────
     // CUSTOMER: CREATE TASK
@@ -681,6 +684,18 @@ public class TaskRequestService {
         BigDecimal platformFee = finalAmount.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP);
         BigDecimal providerEarnings = finalAmount.subtract(platformFee).setScale(2, RoundingMode.HALF_UP);
 
+        String payMethod = task.getPaymentMethod();
+        if (payMethod == null) {
+            payMethod = "ONLINE";
+            task.setPaymentMethod(payMethod);
+        }
+
+        String payStatus = "PAID";
+        task.setPaymentStatus(payStatus);
+
+        String payReceivedBy = "ONLINE".equalsIgnoreCase(payMethod) ? "PLATFORM" : "PROVIDER";
+        task.setPaymentReceivedBy(payReceivedBy);
+
         task.setStatus(TaskRequestStatus.COMPLETED);
         task.setCompletedAt(LocalDateTime.now());
         task.setPlatformFee(platformFee);
@@ -688,17 +703,61 @@ public class TaskRequestService {
         task = taskRequestRepository.save(task);
 
         // Record transaction
-        transactionRepository.save(Transaction.builder()
+        Transaction txn = Transaction.builder()
                 .bookingId(taskId)
                 .customerId(task.getUser().getId())
                 .providerId(providerId)
                 .amount(billable)
                 .commission(platformFee)
                 .providerEarnings(providerEarnings)
-                .status("RELEASED")
+                .status("ONLINE".equalsIgnoreCase(payMethod) ? "RELEASED" : "PENDING")
+                .commissionStatus("ONLINE".equalsIgnoreCase(payMethod) ? "AUTO_DEDUCTED" : "PENDING")
+                .commissionDueDate("ONLINE".equalsIgnoreCase(payMethod) ? null : LocalDateTime.now().plusDays(7))
+                .settlementStatus("PENDING")
                 .transactionId("TX-" + System.currentTimeMillis() + "-" + taskId)
                 .createdAt(LocalDateTime.now())
-                .build());
+                .build();
+
+        // Update provider wallet
+        ProviderWallet wallet = providerWalletRepository.findByProviderId(providerId)
+                .orElseGet(() -> ProviderWallet.builder()
+                        .providerId(providerId)
+                        .balance(BigDecimal.ZERO)
+                        .onlineEarnings(BigDecimal.ZERO)
+                        .codEarnings(BigDecimal.ZERO)
+                        .outstandingCommission(BigDecimal.ZERO)
+                        .currency("NPR")
+                        .updatedAt(LocalDateTime.now())
+                        .build());
+
+        if (wallet.getOnlineEarnings() == null) wallet.setOnlineEarnings(BigDecimal.ZERO);
+        if (wallet.getCodEarnings() == null) wallet.setCodEarnings(BigDecimal.ZERO);
+        if (wallet.getOutstandingCommission() == null) wallet.setOutstandingCommission(BigDecimal.ZERO);
+        if (wallet.getBalance() == null) wallet.setBalance(BigDecimal.ZERO);
+
+        if ("ONLINE".equalsIgnoreCase(payMethod)) {
+            wallet.setOnlineEarnings(wallet.getOnlineEarnings().add(providerEarnings));
+            wallet.setBalance(wallet.getBalance().add(providerEarnings));
+        } else {
+            wallet.setCodEarnings(wallet.getCodEarnings().add(billable));
+            wallet.setOutstandingCommission(wallet.getOutstandingCommission().add(platformFee));
+            wallet.setBalance(wallet.getBalance().subtract(platformFee));
+        }
+
+        // Auto-Deduction execution
+        if (wallet.getOutstandingCommission().compareTo(BigDecimal.ZERO) > 0 && wallet.getBalance().compareTo(BigDecimal.ZERO) > 0) {
+            BigDecimal deductable = wallet.getOutstandingCommission().min(wallet.getBalance());
+            wallet.setOutstandingCommission(wallet.getOutstandingCommission().subtract(deductable));
+            wallet.setBalance(wallet.getBalance().subtract(deductable));
+
+            if ("COD".equalsIgnoreCase(payMethod) && deductable.compareTo(platformFee) >= 0) {
+                txn.setCommissionStatus("AUTO_DEDUCTED");
+                txn.setSettlementStatus("AUTO_DEDUCTED");
+            }
+        }
+
+        providerWalletRepository.save(wallet);
+        transactionRepository.save(txn);
 
         // Award reward points to customer (0.10 points per NPR spent)
         BigDecimal pointsPerNpr = settings.getPointsPerNprSpent() != null ? settings.getPointsPerNprSpent() : new BigDecimal("0.10");

@@ -45,6 +45,21 @@ public class Complaint {
     @Column(name = "priority", nullable = false)
     private String priority; // LOW, MEDIUM, HIGH
 
+    @Column(name = "category", nullable = false)
+    private String category; // LATE_ARRIVAL, POOR_WORK, etc.
+
+    @Column(name = "winner")
+    private String winner; // CUSTOMER, PROVIDER
+
+    @Column(name = "refund_amount")
+    private java.math.BigDecimal refundAmount = java.math.BigDecimal.ZERO;
+
+    @Column(name = "penalty_amount")
+    private java.math.BigDecimal penaltyAmount = java.math.BigDecimal.ZERO;
+
+    @Column(name = "compensation_amount")
+    private java.math.BigDecimal compensationAmount = java.math.BigDecimal.ZERO;
+
     @Column(name = "evidence_url")
     private String evidenceUrl;
 

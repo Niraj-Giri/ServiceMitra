@@ -1,6 +1,6 @@
 package com.mitra.reviews;
 
-import com.mitra.bookings.Booking;
+import com.mitra.taskrequests.TaskRequest;
 import com.mitra.users.Provider;
 import com.mitra.users.User;
 import jakarta.persistence.*;
@@ -22,7 +22,7 @@ public class Review {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "booking_id")
-    private Booking booking;
+    private TaskRequest booking;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "customer_id", nullable = false)
@@ -40,6 +40,19 @@ public class Review {
     @Column(name = "is_hidden", nullable = false)
     @Builder.Default
     private Boolean isHidden = false;
+
+    @Column(name = "is_reported", nullable = false)
+    @Builder.Default
+    private Boolean isReported = false;
+
+    @Column(name = "report_reason")
+    private String reportReason;
+
+    @Column(name = "appeal_status")
+    private String appealStatus; // PENDING, APPROVED, REJECTED
+
+    @Column(name = "moderation_notes", columnDefinition = "TEXT")
+    private String moderationNotes;
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;

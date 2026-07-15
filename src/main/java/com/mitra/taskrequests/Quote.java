@@ -33,6 +33,7 @@ public class Quote {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "task_request_id", nullable = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private TaskRequest taskRequest;
 
     @ManyToOne(fetch = FetchType.EAGER)

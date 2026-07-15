@@ -14,4 +14,5 @@ public interface ServiceListingRepository extends JpaRepository<ServiceListing, 
     Optional<ServiceListing> findByIdAndIsActiveTrue(Long id);
 
     long countByIsActiveTrue();
+    long countByIsActiveFalse();
 }

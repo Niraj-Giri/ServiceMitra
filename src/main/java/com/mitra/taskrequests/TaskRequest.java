@@ -134,6 +134,12 @@ public class TaskRequest {
     @Column(name = "payment_method", length = 50)
     private String paymentMethod;
 
+    @Column(name = "payment_status", length = 20)
+    private String paymentStatus;
+
+    @Column(name = "payment_received_by", length = 20)
+    private String paymentReceivedBy;
+
     /** CUSTOMER | PROVIDER | ADMIN */
     @Column(name = "cancelled_by")
     private String cancelledBy;
@@ -143,6 +149,14 @@ public class TaskRequest {
 
     @Column(name = "cancelled_at")
     private LocalDateTime cancelledAt;
+
+    @Column(name = "is_paused", nullable = false)
+    @Builder.Default
+    private Boolean isPaused = false;
+
+    @Column(name = "is_escalated", nullable = false)
+    @Builder.Default
+    private Boolean isEscalated = false;
 
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;

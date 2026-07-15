@@ -80,6 +80,8 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
     // ─── Analytics ────────────────────────────────────────────────────────────────
 
     long countByStatus(BookingStatus status);
+    long countByProviderIsNullAndStatus(BookingStatus status);
+    long countByStatusInAndScheduledAtBefore(java.util.List<BookingStatus> statuses, java.time.LocalDateTime dateTime);
 
     @Query("""
         SELECT COALESCE(SUM(b.platformFee), 0)
@@ -95,4 +97,7 @@ public interface BookingRepository extends JpaRepository<Booking, Long> {
           AND b.status = 'COMPLETED'
     """)
     java.time.LocalDateTime findLatestCompletedJobDate(@Param("providerId") Long providerId);
+
+    @Query("SELECT COUNT(b) FROM Booking b WHERE b.createdAt >= :startOfDay")
+    long countBookingsCreatedAfter(@Param("startOfDay") java.time.LocalDateTime startOfDay);
 }

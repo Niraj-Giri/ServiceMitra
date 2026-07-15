@@ -73,6 +73,27 @@ public class User {
     @Builder.Default
     private Boolean isDeleted = false;
 
+    @Column(name = "coupons_disabled", nullable = false)
+    @Builder.Default
+    private Boolean couponsDisabled = false;
+
+    @Column(name = "rewards_disabled", nullable = false)
+    @Builder.Default
+    private Boolean rewardsDisabled = false;
+
+    @Column(name = "bookings_limited", nullable = false)
+    @Builder.Default
+    private Boolean bookingsLimited = false;
+
+    @Column(name = "gender")
+    private String gender;
+
+    @Column(name = "date_of_birth")
+    private java.time.LocalDate dateOfBirth;
+
+    @Column(name = "last_login")
+    private LocalDateTime lastLogin;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;
 

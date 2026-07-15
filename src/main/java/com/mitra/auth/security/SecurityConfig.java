@@ -59,10 +59,10 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/services", "/api/v1/services/**").permitAll()
 
                 // -- Admin-only endpoints -----------------------------------
-                // All /admin/** paths require ROLE_ADMIN
-                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                // All /admin/** paths require admin roles
+                .requestMatchers("/api/v1/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN", "OPS_MANAGER", "SUPPORT_TEAM", "FINANCE_TEAM", "KYC_TEAM", "MODERATOR", "MARKETING", "VIEWER")
                 // Admin task management endpoints
-                .requestMatchers("/api/v1/tasks/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/v1/tasks/admin/**").hasAnyRole("ADMIN", "SUPER_ADMIN", "OPS_MANAGER", "SUPPORT_TEAM", "FINANCE_TEAM", "KYC_TEAM", "MODERATOR", "MARKETING", "VIEWER")
 
                 // -- All other endpoints require any authenticated user -----
                 .anyRequest().authenticated()

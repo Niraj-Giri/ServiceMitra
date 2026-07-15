@@ -120,6 +120,48 @@ public class Provider {
     @Column(name = "admin_notes")
     private String adminNotes;
 
+    @Column(name = "completion_rate", precision = 5, scale = 2, nullable = false)
+    @Builder.Default
+    private BigDecimal completionRate = BigDecimal.valueOf(100.00);
+
+    @Column(name = "cancellation_rate", precision = 5, scale = 2, nullable = false)
+    @Builder.Default
+    private BigDecimal cancellationRate = BigDecimal.valueOf(0.00);
+
+    @Column(name = "response_time_min", nullable = false)
+    @Builder.Default
+    private Integer responseTimeMin = 0;
+
+    @Column(name = "gender")
+    private String gender;
+
+    @Column(name = "date_of_birth")
+    private java.time.LocalDate dateOfBirth;
+
+    @Column(name = "city")
+    private String city;
+
+    @Column(name = "state")
+    private String state;
+
+    @Column(name = "pincode")
+    private String pincode;
+
+    @Column(name = "last_active")
+    private LocalDateTime lastActive;
+
+    @Column(name = "emergency_contact")
+    private String emergencyContact;
+
+    @Column(name = "pan_number")
+    private String panNumber;
+
+    @Column(name = "aadhaar_number")
+    private String aadhaarNumber;
+
+    @Column(name = "driving_license")
+    private String drivingLicense;
+
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;
 
