@@ -108,8 +108,21 @@ public class FileStorageService {
                     )
             );
             return (String) uploadResult.get("secure_url");
-        } catch (IOException ex) {
-            throw new RuntimeException("Could not upload file. Please try again.", ex);
+        } catch (Exception ex) {
+            System.err.println("Cloudinary upload failed. Storing file locally. Reason: " + ex.getMessage());
+            try {
+                String originalFileName = file.getOriginalFilename();
+                String fileExtension = "";
+                if (originalFileName != null && originalFileName.contains(".")) {
+                    fileExtension = originalFileName.substring(originalFileName.lastIndexOf("."));
+                }
+                String newFileName = java.util.UUID.randomUUID().toString() + fileExtension;
+                Path targetLocation = this.fileStorageLocation.resolve(newFileName);
+                Files.write(targetLocation, file.getBytes());
+                return newFileName;
+            } catch (IOException ioEx) {
+                throw new RuntimeException("Could not store file locally. Error: " + ioEx.getMessage(), ioEx);
+            }
         }
     }
 

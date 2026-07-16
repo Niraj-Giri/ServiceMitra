@@ -69,6 +69,9 @@ public class Complaint {
     @Column(name = "internal_notes", columnDefinition = "TEXT")
     private String internalNotes;
 
+    @Column(name = "resolution_remarks", columnDefinition = "TEXT")
+    private String resolutionRemarks;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

@@ -58,6 +58,9 @@ public class ServiceListing {
     @Column(name = "what_excluded", columnDefinition = "TEXT")
     private String whatExcluded;
 
+    @Column(name = "image_url")
+    private String imageUrl;
+
     @Column(name = "is_active")
     @Builder.Default
     private Boolean isActive = true;

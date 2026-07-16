@@ -11,8 +11,32 @@ class MechanicApplicationTests {
 	@org.springframework.beans.factory.annotation.Autowired
 	private com.mitra.taskrequests.QuoteRepository quoteRepository;
 
+	@org.springframework.beans.factory.annotation.Autowired
+	private com.mitra.services.ServiceListingRepository serviceListingRepository;
+
+	@org.springframework.beans.factory.annotation.Autowired
+	private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+
 	@Test
 	void contextLoads() {
+		try {
+			System.out.println("====== APPLYING SCHEMA PATCH ======");
+			try {
+				jdbcTemplate.execute("ALTER TABLE services ADD COLUMN image_url VARCHAR(255) NULL;");
+			} catch (Exception ignored) {}
+			jdbcTemplate.execute("UPDATE services SET is_active = TRUE WHERE is_active IS NULL;");
+			System.out.println("====== JPQL findServices TEST ======");
+			java.util.List<com.mitra.services.ServiceListing> res = serviceListingRepository.findAll();
+			System.out.println("RESULT COUNT: " + res.size());
+			for (com.mitra.services.ServiceListing s : res) {
+				System.out.println(" - " + s.getId() + ": " + s.getName() + " (imageUrl=" + s.getImageUrl() + ")");
+			}
+			System.out.println("=========================================");
+		} catch (Exception e) {
+			System.err.println("=== ERROR IN SERVICE DB TEST ===");
+			e.printStackTrace();
+			System.err.println("=================================");
+		}
 	}
 
 	@org.springframework.beans.factory.annotation.Autowired

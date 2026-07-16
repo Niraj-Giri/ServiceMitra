@@ -95,7 +95,34 @@ public class ComplaintController {
         } else {
             complaints = complaintRepository.findByCustomerIdOrderByCreatedAtDesc(userId);
         }
+        
+        // Hide internal notes from customer/provider
+        for (Complaint c : complaints) {
+            c.setInternalNotes(null);
+        }
         return ResponseEntity.ok(ApiResponse.success(complaints));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<ApiResponse<Complaint>> getComplaint(
+            HttpServletRequest request,
+            @PathVariable Long id) {
+        Long userId = authService.extractUserIdFromToken(request);
+        String role = authService.extractRoleFromToken(request);
+
+        Complaint complaint = complaintRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
+
+        if ("PROVIDER".equalsIgnoreCase(role) && !complaint.getProviderId().equals(userId)) {
+            throw new ForbiddenException("Unauthorized access to this complaint.");
+        }
+        if ("CUSTOMER".equalsIgnoreCase(role) && !complaint.getCustomerId().equals(userId)) {
+            throw new ForbiddenException("Unauthorized access to this complaint.");
+        }
+
+        // Hide internal notes
+        complaint.setInternalNotes(null);
+        return ResponseEntity.ok(ApiResponse.success(complaint));
     }
 
     @GetMapping("/{id}/messages")
@@ -154,5 +181,50 @@ public class ComplaintController {
 
         message = complaintMessageRepository.save(message);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(message));
+    }
+
+    @PutMapping("/{id}/respond")
+    @Transactional
+    public ResponseEntity<ApiResponse<Complaint>> respondToInformationRequest(
+            HttpServletRequest request,
+            @PathVariable Long id,
+            @RequestBody Map<String, String> payload) {
+        
+        Long userId = authService.extractUserIdFromToken(request);
+        String role = authService.extractRoleFromToken(request);
+
+        Complaint complaint = complaintRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
+
+        if ("PROVIDER".equalsIgnoreCase(role) && !complaint.getProviderId().equals(userId)) {
+            throw new ForbiddenException("Unauthorized to respond to this complaint.");
+        }
+        if ("CUSTOMER".equalsIgnoreCase(role) && !complaint.getCustomerId().equals(userId)) {
+            throw new ForbiddenException("Unauthorized to respond to this complaint.");
+        }
+
+        if (!"REQUEST_MORE_INFORMATION".equals(complaint.getStatus())) {
+            throw new BadRequestException("You can only submit response updates when the status is REQUEST_MORE_INFORMATION.");
+        }
+
+        String responseText = payload.get("responseText");
+        if (responseText == null || responseText.trim().isEmpty()) {
+            throw new BadRequestException("Response text cannot be empty.");
+        }
+
+        String newEvidence = payload.get("evidenceUrl");
+
+        String updatedDescription = complaint.getDescription() + 
+                "\n\n[Response from " + role + " - " + LocalDateTime.now() + "]:\n" + responseText.trim();
+        
+        complaint.setDescription(updatedDescription);
+        if (newEvidence != null && !newEvidence.trim().isEmpty()) {
+            complaint.setEvidenceUrl(newEvidence.trim());
+        }
+        
+        complaint.setStatus("UNDER_REVIEW");
+        complaintRepository.save(complaint);
+
+        return ResponseEntity.ok(ApiResponse.success(complaint, "Response submitted successfully"));
     }
 }

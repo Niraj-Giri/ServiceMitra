@@ -106,17 +106,12 @@ public class AuthController {
                 payload.get("category"),
                 payload.get("address"),
                 payload.get("profilePhotoUrl"),
-                payload.get("citizenUrl"),
+                payload.containsKey("citizenshipCardUrl") ? payload.get("citizenshipCardUrl") : payload.get("citizenUrl"),
                 payload.get("otp")
             );
-            Provider provider = providerRepository.findById(providerId).orElseThrow();
-            String token = authService.generateToken(provider);
-            Object principal = authService.buildProviderUserMap(provider);
             
             Map<String, Object> response = new HashMap<>();
-            response.put("token", token);
-            response.put("user", principal);
-            response.put("message", "Provider registered successfully and is pending approval");
+            response.put("message", "Provider registered successfully. Your profile is pending admin approval.");
             return ResponseEntity.ok(response);
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));

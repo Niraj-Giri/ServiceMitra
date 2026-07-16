@@ -54,6 +54,7 @@ public class AdminController {
     private final ProviderWalletRepository providerWalletRepository;
     private final WalletTransactionRepository walletTransactionRepository;
     private final BroadcastNotificationRepository broadcastNotificationRepository;
+    private final ComplaintAdminNoteRepository complaintAdminNoteRepository;
 
     // Helper for audit logs
     private String getClientIp() {
@@ -925,6 +926,7 @@ public class AdminController {
                 .durationMin(request.getDurationMin())
                 .whatIncluded(request.getWhatIncluded())
                 .whatExcluded(request.getWhatExcluded())
+                .imageUrl(request.getImageUrl())
                 .isActive(true)
                 .build();
         service = serviceListingRepository.save(service);
@@ -945,6 +947,7 @@ public class AdminController {
         if (request.getDurationMin() != null) service.setDurationMin(request.getDurationMin());
         if (request.getWhatIncluded() != null) service.setWhatIncluded(request.getWhatIncluded());
         if (request.getWhatExcluded() != null) service.setWhatExcluded(request.getWhatExcluded());
+        if (request.getImageUrl() != null) service.setImageUrl(request.getImageUrl());
         service = serviceListingRepository.save(service);
         logAdminAction("Updated service listing: " + service.getName(), "ServiceListing", "", service.getName());
         return ResponseEntity.ok(ApiResponse.success(service));
@@ -1055,22 +1058,12 @@ public class AdminController {
         Complaint complaint = complaintRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
 
-        String category = (String) body.get("category");
-        String winner = (String) body.get("winner");
-        BigDecimal refundAmount = body.containsKey("refundAmount") ? new BigDecimal(body.get("refundAmount").toString()) : BigDecimal.ZERO;
+        String remarks = (String) body.get("resolutionRemarks");
         BigDecimal penaltyAmount = body.containsKey("penaltyAmount") ? new BigDecimal(body.get("penaltyAmount").toString()) : BigDecimal.ZERO;
-        BigDecimal compensationAmount = body.containsKey("compensationAmount") ? new BigDecimal(body.get("compensationAmount").toString()) : BigDecimal.ZERO;
-        String reason = (String) body.get("reason");
-        String decision = (String) body.get("decision");
 
         complaint.setStatus("RESOLVED");
         complaint.setResolvedAt(LocalDateTime.now());
-        if (category != null) complaint.setCategory(category);
-        if (winner != null) complaint.setWinner(winner);
-        if (refundAmount != null) complaint.setRefundAmount(refundAmount);
-        if (penaltyAmount != null) complaint.setPenaltyAmount(penaltyAmount);
-        if (compensationAmount != null) complaint.setCompensationAmount(compensationAmount);
-        if (decision != null) complaint.setInternalNotes(decision);
+        complaint.setResolutionRemarks(remarks);
 
         complaintRepository.save(complaint);
 
@@ -1097,36 +1090,102 @@ public class AdminController {
                     .build());
         }
 
-        logAdminAction("Resolved complaint #" + id + ". Winner: " + winner + ", Refund: " + refundAmount + ", Penalty: " + penaltyAmount, "Complaint", "PENDING", "RESOLVED", reason);
+        logAdminAction("Resolved complaint #" + id + ". Remarks: " + remarks + ", Penalty: " + penaltyAmount, "Complaint", complaint.getStatus(), "RESOLVED", remarks);
         return ResponseEntity.ok(ApiResponse.success(null, "Complaint resolved successfully"));
     }
 
-    @PutMapping("/complaints/{id}/assign")
+    @PutMapping("/complaints/{id}/reject")
     @Transactional
-    public ResponseEntity<ApiResponse<Complaint>> assignComplaint(
-            @PathVariable Long id,
-            @RequestBody Map<String, Object> body) {
+    public ResponseEntity<ApiResponse<Void>> rejectComplaint(
+            @PathVariable Long id, @RequestBody Map<String, Object> body) {
         Complaint complaint = complaintRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
-        Long adminId = body.get("adminId") != null ? Long.valueOf(body.get("adminId").toString()) : null;
-        complaint.setAssignedAdminId(adminId);
+
+        String remarks = (String) body.get("resolutionRemarks");
+
+        complaint.setStatus("REJECTED");
+        complaint.setResolvedAt(LocalDateTime.now());
+        complaint.setResolutionRemarks(remarks);
+
         complaintRepository.save(complaint);
-        logAdminAction("Assigned complaint #" + id + " to admin " + adminId, "Complaint", "", String.valueOf(adminId));
-        return ResponseEntity.ok(ApiResponse.success(complaint));
+
+        logAdminAction("Rejected complaint #" + id + ". Remarks: " + remarks, "Complaint", complaint.getStatus(), "REJECTED", remarks);
+        return ResponseEntity.ok(ApiResponse.success(null, "Complaint rejected successfully"));
     }
 
-    @PutMapping("/complaints/{id}/notes")
+    @PutMapping("/complaints/{id}/status")
     @Transactional
-    public ResponseEntity<ApiResponse<Complaint>> updateComplaintNotes(
-            @PathVariable Long id,
-            @RequestBody Map<String, String> body) {
+    public ResponseEntity<ApiResponse<Void>> updateComplaintStatus(
+            @PathVariable Long id, @RequestBody Map<String, String> body) {
         Complaint complaint = complaintRepository.findById(id)
                 .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
-        String notes = body.get("notes");
-        complaint.setInternalNotes(notes);
+
+        String status = body.get("status");
+        if (status == null || (!status.equals("UNDER_REVIEW") && !status.equals("REQUEST_MORE_INFORMATION"))) {
+            throw new BadRequestException("Invalid status update value. Choose UNDER_REVIEW or REQUEST_MORE_INFORMATION.");
+        }
+
+        complaint.setStatus(status);
         complaintRepository.save(complaint);
-        logAdminAction("Updated internal notes for complaint #" + id, "Complaint", "", notes);
-        return ResponseEntity.ok(ApiResponse.success(complaint));
+
+        logAdminAction("Updated complaint status for #" + id + " to " + status, "Complaint", "", status);
+        return ResponseEntity.ok(ApiResponse.success(null, "Status updated to " + status));
+    }
+
+    @GetMapping("/complaints/{id}/notes")
+    public ResponseEntity<ApiResponse<List<ComplaintAdminNote>>> getComplaintNotes(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.success(complaintAdminNoteRepository.findByComplaintIdOrderByCreatedAtDesc(id)));
+    }
+
+    @PostMapping("/complaints/{id}/notes")
+    @Transactional
+    public ResponseEntity<ApiResponse<ComplaintAdminNote>> addComplaintNote(
+            @PathVariable Long id, @RequestBody Map<String, String> body) {
+        
+        String noteText = body.get("noteText");
+        if (noteText == null || noteText.trim().isEmpty()) {
+            throw new BadRequestException("Note content cannot be empty.");
+        }
+
+        ComplaintAdminNote note = ComplaintAdminNote.builder()
+                .complaintId(id)
+                .adminName(getAdminIdentity())
+                .noteText(noteText.trim())
+                .build();
+
+        note = complaintAdminNoteRepository.save(note);
+        logAdminAction("Added internal note to complaint #" + id, "Complaint", "", noteText);
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(note));
+    }
+
+    @PutMapping("/complaints/{id}/refund")
+    @Transactional
+    public ResponseEntity<ApiResponse<Void>> approveComplaintRefund(@PathVariable Long id) {
+        Complaint complaint = complaintRepository.findById(id)
+                .orElseThrow(() -> ResourceNotFoundException.of("Complaint", id));
+        
+        com.mitra.taskrequests.TaskRequest task = taskRequestRepository.findById(complaint.getBookingId())
+                .orElseThrow(() -> ResourceNotFoundException.of("Booking", complaint.getBookingId()));
+
+        if (!"ONLINE".equalsIgnoreCase(task.getPaymentMethod())) {
+            throw new BadRequestException("Refund is only allowed if the booking was paid online.");
+        }
+
+        task.setPaymentStatus("REFUNDED");
+        taskRequestRepository.save(task);
+
+        transactionRepository.findByBookingId(task.getId()).ifPresent(tx -> {
+            tx.setStatus("REFUNDED");
+            transactionRepository.save(tx);
+        });
+
+        complaint.setStatus("RESOLVED");
+        complaint.setResolvedAt(LocalDateTime.now());
+        complaint.setResolutionRemarks("Refund approved of amount: ₹" + task.getFinalAmountNpr());
+        complaintRepository.save(complaint);
+
+        logAdminAction("Approved refund for complaint #" + id + ", booking #" + task.getId(), "Complaint", "", "REFUNDED");
+        return ResponseEntity.ok(ApiResponse.success(null, "Refund approved and complaint resolved."));
     }
 
     // -----------------------------------------------------------------------------
@@ -1562,5 +1621,6 @@ public class AdminController {
         private Integer durationMin;
         private String whatIncluded;
         private String whatExcluded;
+        private String imageUrl;
     }
 }

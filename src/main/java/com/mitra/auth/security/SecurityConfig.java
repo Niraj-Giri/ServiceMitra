@@ -57,6 +57,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/auth/**").permitAll()
                 // Public service browsing (no login needed to see services)
                 .requestMatchers(HttpMethod.GET, "/api/v1/services", "/api/v1/services/**").permitAll()
+                // Public file upload/serve access for registration purposes
+                .requestMatchers("/api/v1/files/**").permitAll()
 
                 // -- Admin-only endpoints -----------------------------------
                 // All /admin/** paths require admin roles
